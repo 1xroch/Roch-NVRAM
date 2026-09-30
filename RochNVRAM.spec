@@ -11,6 +11,7 @@ import sys
 # properties disagree with the program inside it.
 sys.path.insert(0, SPECPATH)
 from bios_manager.version import APP_NAME, VERSION_TUPLE, __version__
+from tools.windows_bundle import use_windows_icu
 
 _numbers = ", ".join(str(part) for part in VERSION_TUPLE)
 _dotted = ".".join(str(part) for part in VERSION_TUPLE)
@@ -111,6 +112,9 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Qt imports Windows' ICU ABI. Never ship an unrelated ICU found on PATH:
+# 1.0.2 collected ICU 78, whose suffixed exports fail to satisfy Qt on Windows 10.
+a.binaries = use_windows_icu(a.binaries)
 pyz = PYZ(a.pure)
 
 exe = EXE(

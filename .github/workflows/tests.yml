@@ -21,10 +21,10 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.14'
+          python-version: '3.11'
 
       - name: Install dependencies
-        run: py -m pip install --disable-pip-version-check -r requirements.txt
+        run: python -m pip install --disable-pip-version-check -r requirements-build.txt
 
       - name: Run the tests
         # No firmware on a runner and no administrator rights, which is fine:
@@ -34,14 +34,14 @@ jobs:
         # change can break without a bench to notice. Nothing here executes
         # SCEWIN. The Qt tests build widgets offscreen; they set the platform
         # themselves.
-        run: py -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -v
 
       - name: Check the build still packages
-        # A missing import does not fail a test; it fails the first time someone
-        # runs the EXE. Building here catches that.
+        # Source tests do not validate the DLLs actually collected in the EXE.
         run: |
-          py -m pip install --disable-pip-version-check pyinstaller
-          py -m PyInstaller --clean -y RochNVRAM.spec
+          python -m PyInstaller --clean -y RochNVRAM.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/windows_bundle.py dist/RochNVRAM.exe
 
       - uses: actions/upload-artifact@v7
         with:

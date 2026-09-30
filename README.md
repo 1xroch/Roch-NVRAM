@@ -1,4 +1,4 @@
-# Roch NVRAM 1.0.2
+# Roch NVRAM 1.0.3
 
 Roch NVRAM is a Windows editor for AMI SCEWIN NVRAM exports. It reads the live NVRAM,
 lets you queue setting changes, and writes them only after a backup, a fresh re-export
@@ -185,7 +185,7 @@ Live mode and the tests are unaffected; the tests use their own committed fixtur
 run_tests.bat
 ```
 
-All 79 tests run on a fresh clone. They cover parsing, record order, option and value
+The tests run on a fresh clone. They cover parsing, record order, option and value
 edits, byte-for-byte rewriting, stale-value rejection, profile matching, verification,
 comparison results, CSV export, the catalog and its archiving, the Quick Settings presets
 and the tab that queues from them, the window's own button states, and that the version
@@ -201,17 +201,21 @@ it is there and falls back to the system interpreter with a note when it is not.
 
 ## Building
 
-```bash
-py -m pip install pyinstaller
-py -m PyInstaller --clean -y RochNVRAM.spec
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe -m PyInstaller --clean -y RochNVRAM.spec
+.\.venv\Scripts\python.exe tools/windows_bundle.py dist/RochNVRAM.exe
 ```
 
 That produces `dist\RochNVRAM.exe`, a single file with Python, Qt and the icon inside
 it. Copy `scewin/` beside the executable to run it.
 
-Releases are built on Python 3.14, the newest PySide6 accepts: it ships a single abi3
-wheel and requires `>=3.10,<3.15`, so 3.10 is the floor and 3.15 will not install until
-PySide6 says otherwise.
+Build releases in a clean Python 3.11 environment with the pinned dependencies.
+The build checks Qt's ICU imports against Windows and excludes private ICU DLLs
+that could shadow the operating system's libraries. The final archive check catches
+the incompatible ICU payload shipped in 1.0.2. Verify startup on Windows 10 before
+publishing; a successful build or a Windows 11 launch alone is not that check.
 
 ## Credits
 

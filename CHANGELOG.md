@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3
+
+- Fix the Windows 10 startup failure introduced by the 1.0.2 package. The build
+  excludes an incompatible ICU library collected from the build environment and
+  uses Windows' ICU libraries, as the working 1.0.1 package did.
+- Validate ICU imports before packaging and inspect the finished executable to
+  prevent another package from shadowing Windows ICU with incompatible exports.
+- Pin Qt and packaging dependencies and build on Python 3.11 in a clean environment.
+
 ## 1.0.2
 
 - Added matching dark and light styling throughout the editor, including the native
