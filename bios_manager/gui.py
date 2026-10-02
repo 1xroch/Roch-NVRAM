@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import sys
+import ctypes
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenuBar,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -84,7 +86,8 @@ from .core import (
     write_transaction,
 )
 from .scewin_backend import ApplyResult, LiveExport, ScewinBackend
-from .theme import apply_theme, semantic_color, sync_title_bar
+from .theme import apply_theme, load_dark_mode, semantic_color, sync_title_bar
+from .shared_shell import RochFooter, RochTitleBar
 from .version import APP_NAME, __version__
 
 
@@ -607,6 +610,8 @@ class MainWindow(QMainWindow):
         icon = app_icon()
         if icon is not None:
             self.setWindowIcon(icon)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(700, 480)
         self.resize(1500, 850)
         self._build_menu()
         self._build_ui()
@@ -616,7 +621,8 @@ class MainWindow(QMainWindow):
             self._log_nvram_open("Startup")
 
     def _build_menu(self):
-        menu = self.menuBar().addMenu("File")
+        self.menu_bar = QMenuBar(self)
+        menu = self.menu_bar.addMenu("File")
         open_action = QAction("Open matching export and profile...", self)
         open_action.triggered.connect(self.open_pair)
         menu.addAction(open_action)
@@ -627,7 +633,7 @@ class MainWindow(QMainWindow):
         transaction_action.triggered.connect(self.export_transaction)
         menu.addAction(transaction_action)
 
-        view_menu = self.menuBar().addMenu("View")
+        view_menu = self.menu_bar.addMenu("View")
         self.dark_mode_action = QAction("Dark mode", self)
         self.dark_mode_action.setCheckable(True)
         self.dark_mode_action.setChecked(bool(QApplication.instance().property("dark_mode")))
@@ -647,9 +653,39 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         sync_title_bar(self)
 
+    def nativeEvent(self, event_type, message):
+        # Preserve edge/corner resizing after replacing the native caption.
+        if sys.platform == "win32" and not self.isMaximized() and event_type in (
+            b"windows_generic_MSG", b"windows_dispatcher_MSG",
+        ):
+            from ctypes import wintypes
+            native = wintypes.MSG.from_address(int(message))
+            if native.message == 0x0084:  # WM_NCHITTEST
+                x = ctypes.c_short(native.lParam & 0xffff).value
+                y = ctypes.c_short((native.lParam >> 16) & 0xffff).value
+                # WM_NCHITTEST coordinates are physical pixels; Qt geometry
+                # is logical on scaled displays. Keep both operands physical.
+                rect = wintypes.RECT()
+                get_rect = ctypes.windll.user32.GetWindowRect
+                get_rect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+                get_rect.restype = wintypes.BOOL
+                if not get_rect(int(self.winId()), ctypes.byref(rect)):
+                    return super().nativeEvent(event_type, message)
+                edge = max(1, round(5 * self.devicePixelRatioF()))
+                left, right = x < rect.left + edge, x >= rect.right - edge
+                top, bottom = y < rect.top + edge, y >= rect.bottom - edge
+                hit = (
+                    13 if top and left else 14 if top and right else
+                    16 if bottom and left else 17 if bottom and right else
+                    10 if left else 11 if right else 12 if top else 15 if bottom else 0
+                )
+                if hit:
+                    return True, hit
+        return super().nativeEvent(event_type, message)
+
     def _update_theme_button(self) -> None:
         dark = self.dark_mode_action.isChecked()
-        self.theme_button.setText("☀" if dark else "☾")
+        self.title_bar.set_theme_target(dark)
         action = "light" if dark else "dark"
         self.theme_button.setToolTip(f"Switch to {action} mode")
         self.theme_button.setAccessibleName(f"Switch to {action} mode")
@@ -665,28 +701,19 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(14, 11, 14, 11)
         root_layout.setSpacing(9)
 
-        brand_row = QHBoxLayout()
-        brand_mark = QLabel()
-        icon = app_icon()
-        if icon is not None:
-            brand_mark.setPixmap(icon.pixmap(18, 18))
-        else:
-            brand_mark.setText("▼")
-        brand_mark.setObjectName("brandMark")
-        brand_row.addWidget(brand_mark)
-        brand = QLabel(f"ROCH NVRAM  {__version__}")
-        brand.setObjectName("brand")
-        brand_row.addWidget(brand)
-        brand_row.addStretch(1)
-        self.theme_button = QPushButton()
-        self.theme_button.setObjectName("themeToggle")
-        self.theme_button.setFixedSize(32, 30)
-        self.theme_button.clicked.connect(
-            lambda: self.dark_mode_action.setChecked(not self.dark_mode_action.isChecked())
+        self.title_bar = RochTitleBar(
+            self, f"{APP_NAME} {__version__}", app_icon(),
+            lambda: self.dark_mode_action.setChecked(not self.dark_mode_action.isChecked()),
         )
+        self.theme_button = self.title_bar.theme_button
         self._update_theme_button()
-        brand_row.addWidget(self.theme_button)
-        root_layout.addLayout(brand_row)
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(0)
+        top_layout.addWidget(self.title_bar)
+        top_layout.addWidget(self.menu_bar)
+        self.setMenuWidget(top)
 
         if not self.live_mode:
             banner = QLabel(
@@ -723,25 +750,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._log_tab(), "Log")
         root_layout.addWidget(tabs, 1)
 
-        footer = QHBoxLayout()
-        footer.setSpacing(5)
-        for index, (name, address) in enumerate(SOCIAL_LINKS):
-            if index:
-                divider = QLabel("|")
-                divider.setObjectName("footerDivider")
-                footer.addWidget(divider)
-            link = QPushButton(name)
-            link.setProperty("social", True)
-            link.setCursor(Qt.PointingHandCursor)
-            link.setToolTip(address)
-            link.clicked.connect(
-                lambda _=False, url=address: QDesktopServices.openUrl(QUrl(url))
-            )
-            footer.addWidget(link)
-        footer.addStretch(1)
-        root_layout.addLayout(footer)
-
         self.setCentralWidget(root)
+        self.setStatusBar(RochFooter(self, SOCIAL_LINKS))
 
     def _settings_tab(self) -> QWidget:
         tab = QWidget()
@@ -1933,7 +1943,7 @@ def run(
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(f"{APP_NAME} {__version__}")
     app.setOrganizationName("Roch Studio")
-    apply_theme(app, QSettings().value("darkMode", True, type=bool))
+    apply_theme(app, load_dark_mode())
     icon = app_icon()
     if icon is not None:
         app.setWindowIcon(icon)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.4
+
+- Match Roch Viewer's Consolas typography, compact title and footer strips, and
+  theme, minimize, and close controls while preserving menus and window resizing.
+- Use pure white backgrounds with black text in light mode and pure black
+  backgrounds with white text in dark mode, with shared red accents and readable
+  disabled controls and warnings.
+- Start fresh settings in light mode while retaining an existing saved theme choice.
+- Use a solid black crescent for the light-mode theme control and retain the
+  white sun in dark mode. Keep the original Roch Studio dragon application icon.
+- Preserve the existing export/import, preflight, backup, and verification behavior.
+  The window still opens without reading or writing firmware.
+
 ## 1.0.3
 
 - Fix the Windows 10 startup failure introduced by the 1.0.2 package. The build
