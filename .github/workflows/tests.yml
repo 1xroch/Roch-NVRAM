@@ -12,42 +12,35 @@ permissions:
 jobs:
   test:
     # Windows because the project is: it drives a Windows-only AMI utility and
-    # two kernel drivers, and the live path needs administrator rights. There
-    # is nothing here that would run on another OS.
+    # two kernel drivers, and the live path needs administrator rights.
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.11'
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
 
-      - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-build.txt
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Run the tests
         # No firmware on a runner and no administrator rights, which is fine:
         # the suite reads a committed synthetic export from tests/fixtures
-        # instead of a board, so what runs here is the parsing, the record
-        # rewriting, the comparison and the window construction -- the parts a
-        # change can break without a bench to notice. Nothing here executes
-        # SCEWIN. The Qt tests build widgets offscreen; they set the platform
-        # themselves.
-        run: python -m unittest discover -s tests -v
+        # instead of a board. Nothing here executes SCEWIN.
+        run: cargo test --locked
 
-      - name: Check the build still packages
-        # Source tests do not validate the DLLs actually collected in the EXE.
-        run: |
-          python -m PyInstaller --clean -y RochNVRAM.spec
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/windows_bundle.py dist/RochNVRAM.exe
+      - name: Build the release executable
+        run: cargo build --release --locked
 
       - uses: actions/upload-artifact@v7
         with:
           # Unsigned, and without scewin/ -- the AMI binaries live beside the
           # executable rather than inside it, so this artifact is a build check
           # rather than something to hand to anyone.
-          name: RochNVRAM-unsigned-no-scewin
-          path: dist/RochNVRAM.exe
+          name: roch-nvram-unsigned-no-scewin
+          path: |
+            target/release/roch-nvram.exe
+            target/release/scewin-parser.exe
+            target/release/make-quick-settings.exe
           if-no-files-found: error

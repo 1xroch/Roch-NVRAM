@@ -23,7 +23,7 @@ authenticity or its own right to redistribute them, and anyone redistributing
 Roch NVRAM should satisfy themselves about that separately. If you would rather
 not take them on trust, delete the scewin/ folder and drop in the three files
 from a source you do trust: the paths and the expected filenames are in
-bios_manager/scewin_backend.py, and the application checks for all three and
+src/backend.rs, and the application checks for all three and
 refuses to run live without them.
 
 The drivers are copied to %LOCALAPPDATA%\NVRAM\runtime on first use and loaded
@@ -45,11 +45,18 @@ and verifies every value afterwards -- Import.bat writes the file as it stands.
 
 No file from SCEHUB is included here, and it is not needed to run this.
 
-PySide6 / Qt  (dependency, not bundled in this repository)
-----------------------------------------------------------
-  Copyright (c) The Qt Company Ltd.
-  LGPL-3.0.
+Rust crates  (dependencies, compiled into the executable)
+--------------------------------------------------------
+The window is egui/eframe; the rest is a handful of common crates (regex,
+serde, serde_json, indexmap, sha2, chrono, image, rfd, open, winreg,
+windows-sys). They are fetched from crates.io by Cargo rather than committed
+here, and their exact versions are pinned in Cargo.lock. Almost all are
+licensed under MIT and/or Apache-2.0; a few are Zlib, ISC, BSD, or
+Unicode-3.0. All of these permit use from a GPL-3.0 program. `cargo tree`
+lists the crates, and each crate's licence is in its published package.
 
-The interface is PySide6. It is installed from PyPI by install.bat rather than
-committed here. LGPL-3.0 permits its use from a GPL-3.0 program, and it is
-used as an unmodified library through its public API.
+egui's built-in fonts are embedded as fallbacks (epaint_default_fonts):
+Ubuntu-Light under the Ubuntu Font Licence 1.0, Hack under MIT, and
+Noto Emoji and emoji-icon-font under the SIL Open Font Licence 1.1. On
+Windows the interface itself uses Consolas and Segoe UI Symbol, which are
+read from the system at run time and not redistributed.

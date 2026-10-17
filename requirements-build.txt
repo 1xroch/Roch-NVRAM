@@ -1,5 +1,0 @@
-# Release dependencies, installed in a clean Python 3.11 virtual environment.
--r requirements.txt
-PyInstaller==6.22.2
-pyinstaller-hooks-contrib==2026.7
-pefile==2024.8.26

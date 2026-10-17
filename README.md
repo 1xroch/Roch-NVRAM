@@ -8,6 +8,10 @@ It is the SCEWIN round trip with a review step in the middle. SCEWIN's own `Expo
 and `Import.bat` dump the NVRAM to a text file and write that file back; here the same
 two steps are buttons, and between them you see exactly which settings will change.
 
+This is the Rust edition: one native executable, no Python or Qt runtime. It reads and
+writes the same files as the Python 1.0.4 release -- profiles, transactions, the catalog,
+backups -- byte for byte, and keeps the saved theme choice.
+
 Bundled AMISCE: **5.05.01.0002**. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 
 > **This program writes firmware settings.** Incorrect voltage, clock, memory, security,
@@ -16,33 +20,27 @@ Bundled AMISCE: **5.05.01.0002**. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTI
 
 ## Run
 
-**From a packaged build** (nothing to install — Python and Qt are inside the executable):
+1. Put `roch-nvram.exe` in a folder with `scewin/` beside it.
+2. Run `roch-nvram.exe`, and approve the Windows administrator prompt.
 
-1. Extract the folder: `RochNVRAM.exe` with `scewin/` beside it.
-2. Run `RochNVRAM.exe`, and approve the Windows administrator prompt.
-
-The executable requests those rights through its own manifest, so that layout has no
-`run.bat`. `scewin/` sits next to the executable rather than inside it, which is what
-lets the AMI binaries be replaced without a rebuild.
-
-**From source** (needs Python 3.10 or newer):
-
-1. `install.bat` once, to create `.venv` and install PySide6.
-2. `run.bat`, and approve the administrator prompt.
+`scewin/` sits next to the executable rather than inside it, which is what lets the AMI
+binaries be replaced without a rebuild. The Quick Settings presets and the icon are
+compiled in; an `assets/quick_settings/` folder beside the executable overrides the
+built-in presets.
 
 The window opens with nothing loaded and does not touch the firmware. Press **Export**
 to read the live settings. The administrator prompt appears at launch rather than on
 demand because SCEWIN needs those rights the moment you press Export or Import, and a
-running process cannot elevate itself.
+running process cannot elevate itself. Declining the prompt still opens the window --
+Compare and Log work -- and Export then says what is missing. `--no-elevate` skips the
+prompt altogether.
 
 Existing saved theme choices are retained. Fresh settings start in light mode.
-The interface uses Roch Viewer's font and title controls. Light mode uses white
-backgrounds with black text; dark mode uses black backgrounds with white text.
-Red accents are shared with the other Roch tools, while warnings and disabled
-controls retain their distinct colors. Use the solid moon or sun button at the
-top right, or **View > Dark mode**, to switch themes; the choice is saved.
-The original Roch Studio dragon remains the application icon. YouTube, X, and
-Discord links sit in the bottom-left footer.
+Light mode uses white backgrounds with black text; dark mode uses black backgrounds with
+white text. Red accents are shared with the other Roch tools, while warnings and disabled
+controls retain their distinct colors. Use the solid moon or sun button at the top right,
+or **View > Dark mode**, to switch themes; the choice is saved. The Roch Studio dragon is
+the application icon. YouTube, X, and Discord links sit in the bottom-left footer.
 
 ## Export and Import
 
@@ -59,8 +57,10 @@ The two halves of the round trip, side by side at the head of the NVRAM tab:
 
   It then takes a timestamped backup, runs `SCEWIN_64.exe /I /S nvram_apply.txt`, exports
   again, and verifies every requested value. The file it writes is byte-for-byte the live
-  export outside the queued records — line endings included, so the doubled CRs AMISCE
+  export outside the queued records -- line endings included, so the doubled CRs AMISCE
   puts in its own header survive untouched.
+
+SCEWIN runs on a background thread; the window stays painted, greyed out, while it works.
 
 Everything else needs an NVRAM in the table, so the remaining buttons stay disabled until
 you export one. Compare and Log work on their own files and are always available.
@@ -91,7 +91,7 @@ here. No values are suggested: the tab decides what to show, not what to set.
 
 A preset is the list of settings. `assets/quick_settings/msi_z790_ddr5.json` was built
 from a stock export and a tuned export of an MSI Z790 MPOWER: every setting whose value
-differs between the two is a row, plus a standing list in `tools/make_quick_settings.py`
+differs between the two is a row, plus a standing list in `src/bin/make_quick_settings.rs`
 of controls that belong on the page regardless (Hyper-Threading, XMP, the common timings).
 Rows match the live NVRAM by **token + offset + width**;
 a row the loaded firmware does not have says so and stays disabled. One row can write
@@ -108,7 +108,7 @@ showing a page of disabled rows. Each vendor gets its own preset, built the same
 To build one, export once at stock and once tuned on that board, then run
 
 ```bash
-py tools/make_quick_settings.py stock.txt tuned.txt --vendor ASUS --board "ROG Maximus Z790 Apex" --name "ASUS Z790 (LGA 1700 DDR5)" --platform asus-z790-ddr5 --out assets/quick_settings/asus_z790_ddr5.json
+cargo run --release --bin make-quick-settings -- stock.txt tuned.txt --vendor ASUS --board "ROG Maximus Z790 Apex" --name "ASUS Z790 (LGA 1700 DDR5)" --platform asus-z790-ddr5 --out assets/quick_settings/asus_z790_ddr5.json
 ```
 
 It sorts the differences into the three sections by name, drops fan curves and other
@@ -145,7 +145,7 @@ HII CRC values the app warns, because their offsets may describe different BIOS 
 
 ## Log tab
 
-A catalog of every NVRAM the tool has opened — not a log of changes. Each row records
+A catalog of every NVRAM the tool has opened -- not a log of changes. Each row records
 Date & Time, Source, SCEWIN version, HII CRC32, setting count, SHA-256, and the archived
 file. A verbatim copy of every capture is kept, content-addressed by SHA-256 so identical
 re-opens are not duplicated. Double-click a row to open that exact export.
@@ -158,15 +158,15 @@ re-opens are not duplicated. Double-click a row to open that exact export.
 
 ## Offline mode
 
-`run_offline.bat` is a dry run. It never executes SCEWIN, never writes firmware, needs no
-administrator rights, and hides Export and Import. Compare and Log still work.
+`roch-nvram.exe --offline` is a dry run. It never executes SCEWIN, never writes firmware,
+needs no administrator rights, and hides Export and Import. Compare and Log still work.
 
-It needs a sample export in `data/` — an `nvram.txt` and its parsed `.json`. Those are
+It needs a sample export in `data/` -- an `nvram.txt` and its parsed `.json`. Those are
 board-specific and are not tracked, so a fresh clone has no `data/`: point the app at your
 own export with `--profile` and `--nvram`, or generate a pair with
 
 ```bash
-python -m bios_manager.scewin_parser <nvram.txt> --output data/profile.json
+cargo run --release --bin scewin-parser -- nvram.txt --output data/z890_tachyon_nvram_parsed.json
 ```
 
 Live mode and the tests are unaffected; the tests use their own committed fixture.
@@ -180,50 +180,59 @@ Live mode and the tests are unaffected; the tests use their own committed fixtur
   import `nvram_before.txt` from the backup folder.
 - A successful import may still need a reboot.
 - SCEWIN is an AMI utility bundled here for convenience. This project does not establish
-  its authenticity or its own right to redistribute it — see
+  its authenticity or its own right to redistribute it -- see
   [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+## Building
+
+Needs a Rust toolchain (1.87 or newer) with the MSVC target. The Windows SDK's resource
+compiler stamps the icon and the version from `Cargo.toml` into the executable; without
+it the build still succeeds and says what it skipped.
+
+```bash
+cargo build --release
+```
+
+That produces `target\release\roch-nvram.exe`, a single file with the window, the icon,
+and the presets inside it. Copy `scewin/` beside it to run it. The same build produces
+`scewin-parser.exe` and `make-quick-settings.exe`, the command-line tools.
 
 ## Tests
 
 ```bash
-run_tests.bat
+cargo test
 ```
 
 The tests run on a fresh clone. They cover parsing, record order, option and value
-edits, byte-for-byte rewriting, stale-value rejection, profile matching, verification,
-comparison results, CSV export, the catalog and its archiving, the Quick Settings presets
-and the tab that queues from them, the window's own button states, and that the version
-is written in exactly one place.
+edits, byte-for-byte rewriting, Latin-1 round trips, stale-value rejection, profile
+matching, verification, comparison results, CSV export, the catalog and its archiving,
+the Quick Settings presets and the queueing behind their tab, the NVRAM tab's button
+states, and that the version is written in exactly one place.
 
 The export they read is committed at `tests/fixtures/nvram.txt`: a small synthetic SCEWIN
 file, not a board dump, keeping the record shapes real ones have. Its parsed profile is
 generated during the run rather than committed beside it, so the two cannot drift apart.
 Nothing in the suite executes SCEWIN or touches firmware.
 
-24 of them need PySide6 and skip cleanly without it, so `run_tests.bat` uses `.venv` when
-it is there and falls back to the system interpreter with a note when it is not.
+## Layout
 
-## Building
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
-.\.venv\Scripts\python.exe -m PyInstaller --clean -y RochNVRAM.spec
-.\.venv\Scripts\python.exe tools/windows_bundle.py dist/RochNVRAM.exe
+```text
+src/lib.rs              the library: everything except the window
+  parser.rs             nvram.txt -> settings (scewin_parser.py)
+  core.rs               the export document, edits, rewriting (core.py)
+  backend.rs            SCEWIN export / preflight / backup / import / verify
+  compare.rs            NVRAM 1 vs NVRAM 2
+  catalog.rs            the NVRAM catalog and the activity log
+  quick_settings.rs     presets and their matching
+  session.rs            the window's state and rules, without the window
+  pycompat.rs           Python-compatible JSON, CSV, integers and line splitting
+src/main.rs, src/gui/   the window (egui)
+src/bin/                scewin-parser, make-quick-settings
 ```
-
-That produces `dist\RochNVRAM.exe`, a single file with Python, Qt and the icon inside
-it. Copy `scewin/` beside the executable to run it.
-
-Build releases in a clean Python 3.11 environment with the pinned dependencies.
-The build checks Qt's ICU imports against Windows and excludes private ICU DLLs
-that could shadow the operating system's libraries. The final archive check catches
-the incompatible ICU payload shipped in 1.0.2. Verify startup on Windows 10 before
-publishing; a successful build or a Windows 11 launch alone is not that check.
 
 ## Credits
 
-- **[SCEHUB](https://github.com/ab3lkaizen/SCEHUB)** by ab3lkaizen — packages AMISCE with
+- **[SCEHUB](https://github.com/ab3lkaizen/SCEHUB)** by ab3lkaizen -- packages AMISCE with
   the `Export.bat` / `Import.bat` pair this program is built around. The Export and Import
   buttons are those two steps with a review in between.
 - **AMISCE** is American Megatrends' utility. Every read and write goes through it; this

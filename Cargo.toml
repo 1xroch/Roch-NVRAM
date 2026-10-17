@@ -1,0 +1,66 @@
+[package]
+name = "roch-nvram"
+# The one place the version is written. The window title, the executable's file
+# properties (build.rs) and the tests read it from here; CHANGELOG.md and
+# README.md are checked against it by tests/version.rs.
+version = "1.0.4"
+edition = "2021"
+rust-version = "1.87"
+description = "An editor for AMI SCEWIN NVRAM exports"
+license = "GPL-3.0-or-later"
+authors = ["Roch Studio"]
+repository = "https://github.com/RochStudio/Roch-NVRAM"
+build = "build.rs"
+default-run = "roch-nvram"
+
+[lib]
+name = "roch_nvram"
+path = "src/lib.rs"
+
+[[bin]]
+name = "roch-nvram"
+path = "src/main.rs"
+
+[[bin]]
+name = "scewin-parser"
+path = "src/bin/scewin_parser.rs"
+
+[[bin]]
+name = "make-quick-settings"
+path = "src/bin/make_quick_settings.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+indexmap = { version = "2", features = ["serde"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+# GUI
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui_extras = "0.37"
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
+open = "5"
+raw-window-handle = "0.6"
+rfd = "0.17"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
