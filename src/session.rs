@@ -183,7 +183,9 @@ impl Session {
             buttons.push(("Import", loaded));
         }
         buttons.push(("Queue selected change", loaded));
-        buttons.push(("Load NVRAM...", loaded));
+        // Live, Load NVRAM reads the live NVRAM itself when nothing is loaded
+        // yet; the saved file is compared against that, never written as-is.
+        buttons.push(("Load NVRAM...", loaded || self.live_mode));
         buttons
     }
 

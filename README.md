@@ -1,4 +1,4 @@
-# Roch NVRAM 1.0.4
+# Roch NVRAM 1.0.5
 
 Roch NVRAM is a Windows editor for AMI SCEWIN NVRAM exports. It reads the live NVRAM,
 lets you queue setting changes, and writes them only after a backup, a fresh re-export
@@ -20,8 +20,14 @@ Bundled AMISCE: **5.05.01.0002**. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTI
 
 ## Run
 
-1. Put `roch-nvram.exe` in a folder with `scewin/` beside it.
+1. Download `RochNVRAM-1.0.5-win-x64.zip` from
+   [Releases](https://github.com/1xroch/Roch-NVRAM/releases) and extract the whole
+   folder. `roch-nvram.exe` needs `scewin/` beside it.
 2. Run `roch-nvram.exe`, and approve the Windows administrator prompt.
+
+There is nothing to install: no Python, no Qt, no runtime. Upgrading from 1.0.4 keeps
+your backups, catalog, and theme, which live in `%LOCALAPPDATA%\NVRAM` rather than in the
+program folder.
 
 `scewin/` sits next to the executable rather than inside it, which is what lets the AMI
 binaries be replaced without a rebuild. The Quick Settings presets and the icon are
@@ -38,9 +44,9 @@ prompt altogether.
 Existing saved theme choices are retained. Fresh settings start in light mode.
 Light mode uses white backgrounds with black text; dark mode uses black backgrounds with
 white text. Red accents are shared with the other Roch tools, while warnings and disabled
-controls retain their distinct colors. Use the solid moon or sun button at the top right,
-or **View > Dark mode**, to switch themes; the choice is saved. The Roch Studio dragon is
-the application icon. YouTube, X, and Discord links sit in the bottom-left footer.
+controls retain their distinct colors. Use the solid moon or sun button at the top right
+to switch themes; the choice is saved. The Roch Studio dragon is the application icon.
+YouTube, X, and Discord links sit in the bottom-left footer.
 
 ## Export and Import
 
@@ -60,10 +66,16 @@ The two halves of the round trip, side by side at the head of the NVRAM tab:
   export outside the queued records -- line endings included, so the doubled CRs AMISCE
   puts in its own header survive untouched.
 
+  When every value verifies, the confirmation offers **Restart now**, which restarts
+  Windows straight away, or **Later**. After a memory setting changes, some boards retrain
+  the RAM and open BIOS setup on that boot instead of Windows; that is the board, not a
+  failed import.
+
 SCEWIN runs on a background thread; the window stays painted, greyed out, while it works.
 
-Everything else needs an NVRAM in the table, so the remaining buttons stay disabled until
-you export one. Compare and Log work on their own files and are always available.
+Import and Queue selected change need an NVRAM in the table, so they stay disabled until
+you export one. Load NVRAM exports by itself when nothing is loaded. Compare and Log work
+on their own files and are always available.
 
 Backups and transaction files:
 
@@ -122,6 +134,9 @@ The saved file is never written wholesale: its settings are matched to the live 
 so the preflight, backup, and verification above still apply. Review the queue, then
 press Import.
 
+You do not need to press Export first. If no live export is loaded yet, Load NVRAM asks
+for the saved file and then reads the live NVRAM itself before comparing.
+
 The dialog defaults to the archive of every NVRAM the tool has captured, and reports how
 many settings will be queued, already match, or were skipped. It warns when the saved
 file's HII CRC differs from the live one.
@@ -178,7 +193,7 @@ Live mode and the tests are unaffected; the tests use their own committed fixtur
   variable interface, so SCEWIN exits cleanly while its writes are silently dropped.
 - A backup is taken before every import, but there is no automatic rollback. To revert,
   import `nvram_before.txt` from the backup folder.
-- A successful import may still need a reboot.
+- A successful import may still need a reboot. The confirmation offers **Restart now**.
 - SCEWIN is an AMI utility bundled here for convenience. This project does not establish
   its authenticity or its own right to redistribute it -- see
   [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

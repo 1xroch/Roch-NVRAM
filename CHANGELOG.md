@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.5
+
+- Rewritten in Rust. Roch NVRAM is now one native executable with no Python or Qt
+  runtime to install, and the Quick Settings presets and icon are compiled into it.
+  `scewin/` still sits beside the executable, and an `assets/quick_settings/` folder
+  there still overrides the built-in presets.
+- Profiles, transactions, catalog lines, CSV exports, presets, and backups are written
+  byte for byte as 1.0.4 wrote them, so files from earlier releases keep working. The
+  saved theme choice carries over.
+- The window stays responsive while SCEWIN runs: exports, preflight, backup, import, and
+  verification now run on a background thread. The app still asks for administrator
+  rights at launch, as `run.bat` did.
+- The command-line tools are now `scewin-parser.exe` and `make-quick-settings.exe`,
+  built alongside the app, in place of `scewin_parser.py` and
+  `tools/make_quick_settings.py`.
+- After an import is applied and verified, the confirmation now has a **Restart now**
+  button that restarts Windows so the new settings take effect. **Later** closes it.
+- **Load NVRAM...** no longer needs Export first. With nothing loaded, it asks for the
+  saved file, reads the live NVRAM, and then queues the differences as before.
+- Removed the menu bar. The sun/moon button in the title bar switches themes, and
+  Export modified nvram.txt and Export transaction JSON stay on the Pending Changes tab.
+  Open matching export and profile is gone: Export and Load NVRAM cover it, and
+  `--offline` opens an export with `--profile` and `--nvram`.
+- The project's repository is now https://github.com/1xroch/Roch-NVRAM, and the X
+  link in the footer now goes to https://x.com/1xroch.
+
 ## 1.0.4
 
 - Match Roch Viewer's Consolas typography, compact title and footer strips, and

@@ -200,6 +200,7 @@ enum Action {
     CancelImport,
     QueueLoaded { changes: Vec<PendingChange>, summary: String },
     CancelLoad { summary: String },
+    RestartPc,
 }
 
 enum JobResult {
@@ -254,6 +255,9 @@ struct App {
     dialogs: Vec<Dialog<Action>>,
     edit: Option<EditState>,
     job: Option<Job>,
+    /// A saved export picked with Load NVRAM before anything was loaded: it is
+    /// compared once the live export that was started for it arrives.
+    load_after_export: Option<NvramSnapshot>,
 }
 
 impl App {
@@ -294,6 +298,7 @@ impl App {
             dialogs: Vec::new(),
             edit: None,
             job: None,
+            load_after_export: None,
         }
     }
 
@@ -308,7 +313,14 @@ impl App {
     // ----- messages ----------------------------------------------------------
 
     fn message(&mut self, level: Level, title: &str, text: impl Into<String>) {
-        self.dialogs.push(Dialog { level, title: title.into(), text: text.into(), on_yes: None, on_no: None });
+        self.dialogs.push(Dialog {
+            level,
+            title: title.into(),
+            text: text.into(),
+            on_yes: None,
+            on_no: None,
+            buttons: ("Yes", "No"),
+        });
     }
 
     fn info(&mut self, title: &str, text: impl Into<String>) {
@@ -330,6 +342,7 @@ impl App {
             text: text.into(),
             on_yes: Some(on_yes),
             on_no,
+            buttons: ("Yes", "No"),
         });
     }
 
@@ -340,7 +353,7 @@ impl App {
         let hint = if self.live() {
             "Press Export to read the live settings first."
         } else {
-            "Open an export and profile from the File menu first."
+            "Start the app with --profile and --nvram to open an export."
         };
         self.info("No NVRAM loaded", format!("{action} needs an NVRAM export.\n\n{hint}"));
         false
@@ -424,9 +437,14 @@ impl App {
                 let count = live.profile.settings.len();
                 let path = live.nvram_path.display().to_string();
                 self.show_nvram(live.profile, live.document, "Export NVRAM");
-                self.info("NVRAM exported", format!("Read {} settings from the live NVRAM.\n\n{path}", thousands(count)));
+                if let Some(snapshot) = self.load_after_export.take() {
+                    self.queue_from_snapshot(snapshot);
+                } else {
+                    self.info("NVRAM exported", format!("Read {} settings from the live NVRAM.\n\n{path}", thousands(count)));
+                }
             }
             JobResult::Export(Err(error)) => {
+                self.load_after_export = None;
                 self.log("NVRAM_EXPORT_FAILED", &format!("tag=current; error={error}"));
                 self.critical("NVRAM export failed", error.to_string());
             }
@@ -467,15 +485,20 @@ impl App {
                 );
                 let verified = result.verified_export;
                 self.show_nvram(verified.profile, verified.document, "Live refresh after apply");
-                self.info(
-                    "NVRAM changes applied",
-                    format!(
+                self.dialogs.push(Dialog {
+                    level: Level::Information,
+                    title: "NVRAM changes applied".into(),
+                    text: format!(
                         "All {} queued change(s) were imported and verified.\n\nBackup: {}\n\n\
-                         Reboot Windows for settings that require restart.",
+                         Restart Windows for settings that require a reboot. Save your work in other \
+                         programs before you restart.",
                         result.verified_count,
                         result.backup_dir.display()
                     ),
-                );
+                    on_yes: Some(Action::RestartPc),
+                    on_no: None,
+                    buttons: ("Restart now", "Later"),
+                });
             }
         }
     }
@@ -513,7 +536,28 @@ impl App {
                 );
             }
             Action::CancelLoad { summary } => self.log("NVRAM_LOAD_CANCELLED", &summary),
+            Action::RestartPc => self.restart_pc(),
         }
+    }
+
+    /// Restart Windows right away, after an import the user wants to take effect.
+    fn restart_pc(&mut self) {
+        self.log("RESTART_REQUESTED", "User chose Restart now after a verified NVRAM import.");
+        let mut command = std::process::Command::new("shutdown");
+        command.args(["/r", "/t", "0"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let failure = match command.status() {
+            Ok(status) if status.success() => return,
+            Ok(status) => format!("shutdown exited with {status}."),
+            Err(error) => format!("Could not run shutdown: {error}"),
+        };
+        self.log("RESTART_FAILED", &failure);
+        self.critical("Restart failed", format!("{failure}\n\nThe settings are applied; restart Windows yourself."));
     }
 
     // ----- the round trip ----------------------------------------------------
@@ -613,7 +657,11 @@ impl App {
     }
 
     fn load_nvram(&mut self) {
-        if !self.nvram_loaded("Load NVRAM") {
+        // Live with nothing loaded yet, the saved file is picked first and the
+        // live NVRAM is read right after, so the comparison is always against
+        // what the board holds now.
+        if !self.session.loaded() && !self.live() {
+            self.nvram_loaded("Load NVRAM");
             return;
         }
         let mut dialog = rfd::FileDialog::new()
@@ -632,6 +680,16 @@ impl App {
                 return;
             }
         };
+        if !self.session.loaded() {
+            self.load_after_export = Some(snapshot);
+            self.start_export();
+            return;
+        }
+        self.queue_from_snapshot(snapshot);
+    }
+
+    /// Queue every difference between a saved export and the loaded live one.
+    fn queue_from_snapshot(&mut self, snapshot: NvramSnapshot) {
         let diff = self.session.differences_from(&snapshot);
         let (already, missing, blocked) = (diff.already, diff.missing, diff.blocked.len());
         if diff.queued.is_empty() {
@@ -758,44 +816,6 @@ impl App {
                 self.info("Transaction created", format!("Created:\n{}", output.display()));
             }
             Err(error) => self.critical("Export failed", error.to_string()),
-        }
-    }
-
-    fn open_pair(&mut self) {
-        let Some(nvram) = rfd::FileDialog::new()
-            .set_title("Select original SCEWIN nvram.txt")
-            .add_filter("Text files", &["txt"])
-            .pick_file()
-        else {
-            return;
-        };
-        let Some(profile) = rfd::FileDialog::new()
-            .set_title("Select matching parsed profile JSON")
-            .add_filter("JSON files", &["json"])
-            .pick_file()
-        else {
-            return;
-        };
-        let open = || -> Result<(ParsedProfile, ScewinDocument)> {
-            let new_profile = ParsedProfile::load(&profile)?;
-            let new_document = ScewinDocument::open(&nvram)?;
-            new_document.verify_profile(&new_profile)?;
-            Ok((new_profile, new_document))
-        };
-        match open() {
-            Ok((new_profile, new_document)) => {
-                self.show_nvram(new_profile, new_document, "Manual open");
-                let count = self.session.profile.as_ref().map_or(0, |p| p.settings.len());
-                let path = self.session.document.as_ref().map(|d| d.path.display().to_string()).unwrap_or_default();
-                self.info("NVRAM loaded", format!("Loaded {} settings from:\n{path}", thousands(count)));
-            }
-            Err(error) => {
-                self.log(
-                    "NVRAM_OPEN_FAILED",
-                    &format!("path={}; profile={}; error={error}", nvram.display(), profile.display()),
-                );
-                self.critical("Profile mismatch", error.to_string());
-            }
         }
     }
 
@@ -1141,7 +1161,8 @@ impl App {
                         ),
                         "Load NVRAM..." => response.on_hover_text(
                             "Restore settings from a saved nvram.txt export (for example after a CMOS clear). \
-                             Differences are queued for review before anything is written.",
+                             The live NVRAM is read first if it is not loaded yet. Differences are queued for \
+                             review before anything is written.",
                         ),
                         _ => response,
                     };
@@ -1778,37 +1799,9 @@ impl eframe::App for App {
                 if shell::title_bar(ui, p, &title, self.icon.as_ref(), self.dark).toggle_theme {
                     self.set_dark_mode(&ctx, !self.dark);
                 }
-            });
-
-        let mut menu_action: Option<&'static str> = None;
-        egui::Panel::top("menu")
-            .frame(
-                Frame::new()
-                    .fill(p.window)
-                    .stroke(Stroke::new(1.0, p.border))
-                    .inner_margin(Margin { left: 3, right: 3, top: 3, bottom: 3 }),
-            )
-            .show_separator_line(false)
-            .show(ui, |ui| {
-                egui::MenuBar::new().ui(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Open matching export and profile...").clicked() {
-                            menu_action = Some("open");
-                        }
-                        if ui.button("Export modified nvram.txt...").clicked() {
-                            menu_action = Some("export");
-                        }
-                        if ui.button("Export transaction JSON...").clicked() {
-                            menu_action = Some("transaction");
-                        }
-                    });
-                    ui.menu_button("View", |ui| {
-                        let mut dark = self.dark;
-                        if ui.checkbox(&mut dark, "Dark mode").changed() {
-                            menu_action = Some(if dark { "dark" } else { "light" });
-                        }
-                    });
-                });
+                // The hairline the menu bar used to draw under the title.
+                let rect = ui.max_rect();
+                ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, p.border));
             });
 
         let status = self.status_text();
@@ -1821,15 +1814,6 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(p.window).inner_margin(Margin { left: 14, right: 14, top: 11, bottom: 11 }))
             .show(ui, |ui| self.body(ui));
-
-        match menu_action {
-            Some("open") => self.open_pair(),
-            Some("export") => self.export_nvram(),
-            Some("transaction") => self.export_transaction(),
-            Some("dark") => self.set_dark_mode(&ctx, true),
-            Some("light") => self.set_dark_mode(&ctx, false),
-            _ => {}
-        }
 
         if self.edit.is_some() {
             self.edit_dialog(ui);

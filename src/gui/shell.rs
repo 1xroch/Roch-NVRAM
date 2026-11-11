@@ -18,7 +18,7 @@ pub const FOOTER_HEIGHT: f32 = 24.0;
 
 pub const SOCIAL_LINKS: [(&str, &str); 3] = [
     ("YouTube", "https://www.youtube.com/@MateoPcTech"),
-    ("X", "https://x.com/MateoPCTech"),
+    ("X", "https://x.com/1xroch"),
     ("Discord", "https://discord.gg/KfzExpKQHB"),
 ];
 
@@ -129,7 +129,9 @@ pub fn footer(ui: &mut Ui, palette: &Palette, message: &str) {
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .on_hover_text(*address);
             if link.clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(*address));
+                // Not ctx.open_url: eframe only acts on that with its `links`
+                // feature, which default-features = false leaves out.
+                let _ = open::that_detached(address);
             }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

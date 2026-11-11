@@ -140,11 +140,21 @@ fn the_nvram_tab_row_leads_with_export_and_import() {
 }
 
 #[test]
-fn only_export_works_before_an_nvram_is_loaded() {
+fn only_export_and_load_work_before_an_nvram_is_loaded() {
+    // Load NVRAM reads the live NVRAM itself first, so a past export can be
+    // restored without pressing Export.
     let temp = TempDir::new().unwrap();
     for (label, enabled) in session(temp.path(), true).nvram_buttons() {
-        assert_eq!(enabled, label == "Export", "{label}");
+        assert_eq!(enabled, label == "Export" || label == "Load NVRAM...", "{label}");
     }
+}
+
+#[test]
+fn offline_load_needs_an_opened_export() {
+    // Offline there is no live NVRAM to read, so nothing works until the File
+    // menu opens an export.
+    let temp = TempDir::new().unwrap();
+    assert!(session(temp.path(), false).nvram_buttons().into_iter().all(|(_, enabled)| !enabled));
 }
 
 #[test]

@@ -3,13 +3,13 @@ name = "roch-nvram"
 # The one place the version is written. The window title, the executable's file
 # properties (build.rs) and the tests read it from here; CHANGELOG.md and
 # README.md are checked against it by tests/version.rs.
-version = "1.0.4"
+version = "1.0.5"
 edition = "2021"
 rust-version = "1.87"
 description = "An editor for AMI SCEWIN NVRAM exports"
 license = "GPL-3.0-or-later"
 authors = ["Roch Studio"]
-repository = "https://github.com/RochStudio/Roch-NVRAM"
+repository = "https://github.com/1xroch/Roch-NVRAM"
 build = "build.rs"
 default-run = "roch-nvram"
 
