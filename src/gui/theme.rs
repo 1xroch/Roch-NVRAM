@@ -13,7 +13,6 @@ use eframe::egui::{
 use roch_nvram::session::Tone;
 
 pub const BOLD: &str = "bold";
-pub const SYMBOL: &str = "symbol";
 
 /// One theme's colors. Light mode is white with black text, dark mode black
 /// with white text; red accents are shared with the other Roch tools.
@@ -138,16 +137,9 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
     heavy_family.extend(base.iter().cloned());
 
-    let mut symbol_family: Vec<String> = Vec::new();
-    if symbol {
-        symbol_family.push("segoe-symbol".into());
-    }
-    symbol_family.extend(base.iter().cloned());
-
     fonts.families.insert(FontFamily::Proportional, base.clone());
     fonts.families.insert(FontFamily::Monospace, base);
     fonts.families.insert(FontFamily::Name(BOLD.into()), heavy_family);
-    fonts.families.insert(FontFamily::Name(SYMBOL.into()), symbol_family);
     ctx.set_fonts(fonts);
 }
 

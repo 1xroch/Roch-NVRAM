@@ -1,261 +1,93 @@
 # Roch NVRAM 1.0.5
 
-Roch NVRAM is a Windows editor for AMI SCEWIN NVRAM exports. It reads the live NVRAM,
-lets you queue setting changes, and writes them only after a backup, a fresh re-export
-that confirms nothing moved, and a value-by-value verification afterwards.
+A Windows editor for AMI BIOS settings. It reads the live NVRAM with AMI's SCEWIN, lets
+you review and queue changes, and writes them back only after a backup, a fresh check
+that nothing moved, and a value-by-value verification.
 
-It is the SCEWIN round trip with a review step in the middle. SCEWIN's own `Export.bat`
-and `Import.bat` dump the NVRAM to a text file and write that file back; here the same
-two steps are buttons, and between them you see exactly which settings will change.
+![Roch NVRAM showing the NVRAM tab with 5,364 settings loaded (offline mode)](docs/screenshot.png)
 
-This is the Rust edition: one native executable, no Python or Qt runtime. It reads and
-writes the same files as the Python 1.0.4 release -- profiles, transactions, the catalog,
-backups -- byte for byte, and keeps the saved theme choice.
+> **This program writes firmware settings.** Wrong voltage, clock, memory, or boot values
+> can stop a PC from starting. Keep Clear CMOS or BIOS Flashback within reach.
 
-Bundled AMISCE: **5.05.01.0002**. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
-
-> **This program writes firmware settings.** Incorrect voltage, clock, memory, security,
-> or boot values can stop a machine from starting. Keep Clear CMOS or BIOS Flashback
-> available before you use it.
-
-## Run
+## Download and run
 
 1. Download `RochNVRAM-1.0.5-win-x64.zip` from
-   [Releases](https://github.com/1xroch/Roch-NVRAM/releases) and extract the whole
-   folder. `roch-nvram.exe` needs `scewin/` beside it.
-2. Run `roch-nvram.exe`, and approve the Windows administrator prompt.
+   [Releases](https://github.com/1xroch/Roch-NVRAM/releases) and extract the whole folder.
+   `roch-nvram.exe` needs `scewin/` beside it.
+2. Run `roch-nvram.exe` and approve the administrator prompt.
 
-There is nothing to install: no Python, no Qt, no runtime. Upgrading from 1.0.4 keeps
-your backups, catalog, and theme, which live in `%LOCALAPPDATA%\NVRAM` rather than in the
-program folder.
+There is nothing to install. Backups, the catalog, and the theme live in
+`%LOCALAPPDATA%\NVRAM`, so upgrading keeps them.
 
-`scewin/` sits next to the executable rather than inside it, which is what lets the AMI
-binaries be replaced without a rebuild. The Quick Settings presets and the icon are
-compiled in; an `assets/quick_settings/` folder beside the executable overrides the
-built-in presets.
+## How it works
 
-The window opens with nothing loaded and does not touch the firmware. Press **Export**
-to read the live settings. The administrator prompt appears at launch rather than on
-demand because SCEWIN needs those rights the moment you press Export or Import, and a
-running process cannot elevate itself. Declining the prompt still opens the window --
-Compare and Log work -- and Export then says what is missing. `--no-elevate` skips the
-prompt altogether.
+- **Export** reads the live NVRAM into the table. Nothing touches the firmware until you
+  press it.
+- **Queue** changes from the NVRAM table (double-click a row) or the **Quick Settings** tab.
+  Review them under **Pending Changes**.
+- **Import** re-reads the NVRAM first and refuses to continue if the BIOS layout changed or
+  a value moved since you queued it. Then it backs everything up, writes the changes, reads
+  the NVRAM again, and checks every value. When it verifies, **Restart now** reboots.
+- **Load NVRAM** restores an older `nvram.txt`, for example after a Clear CMOS. It compares
+  the file with the live NVRAM and queues only the differences, so the same checks apply.
 
-Existing saved theme choices are retained. Fresh settings start in light mode.
-Light mode uses white backgrounds with black text; dark mode uses black backgrounds with
-white text. Red accents are shared with the other Roch tools, while warnings and disabled
-controls retain their distinct colors. Use the solid moon or sun button at the top right
-to switch themes; the choice is saved. The Roch Studio dragon is the application icon.
-YouTube, X, and Discord links sit in the bottom-left footer.
+Some boards open BIOS setup on the next boot after a memory setting changes. That is the
+board retraining the RAM, not a failed import.
 
-## Export and Import
+## Tabs
 
-The two halves of the round trip, side by side at the head of the NVRAM tab:
+| Tab | What it does |
+| --- | --- |
+| NVRAM | Every setting in export order. Search names, help text, tokens, and offsets. |
+| Quick Settings | CPU, RAM, and GPU/PCIe overclocking controls on one page, from a per-board preset. |
+| Pending Changes | The queue, with Before and After. Can also save a modified `nvram.txt` or a transaction JSON without writing anything. |
+| Compare | Two exports side by side, showing which values changed. Exports a CSV. |
+| Log | Every NVRAM the tool has read, archived. Double-click to open one. |
 
-- **Export** runs SCEWIN against the live NVRAM and loads the result into the table.
-  Nothing is read from the firmware until you press it.
-- **Import** writes the queued changes. Unlike `Import.bat`, which writes a file as it
-  stands, this re-exports first and refuses to continue when:
-  - the HII CRC changed,
-  - a queued setting is missing,
-  - its current value changed since you queued it,
-  - or it became malformed or ambiguous.
+Settings are matched by **token + offset + width**, never by name, and anything the parser
+can't read unambiguously is greyed out instead of guessed.
 
-  It then takes a timestamped backup, runs `SCEWIN_64.exe /I /S nvram_apply.txt`, exports
-  again, and verifies every requested value. The file it writes is byte-for-byte the live
-  export outside the queued records -- line endings included, so the doubled CRs AMISCE
-  puts in its own header survive untouched.
+## Quick Settings presets
 
-  When every value verifies, the confirmation offers **Restart now**, which restarts
-  Windows straight away, or **Later**. After a memory setting changes, some boards retrain
-  the RAM and open BIOS setup on that boot instead of Windows; that is the board, not a
-  failed import.
-
-SCEWIN runs on a background thread; the window stays painted, greyed out, while it works.
-
-Import and Queue selected change need an NVRAM in the table, so they stay disabled until
-you export one. Load NVRAM exports by itself when nothing is loaded. Compare and Log work
-on their own files and are always available.
-
-Backups and transaction files:
-
-```text
-%LOCALAPPDATA%\NVRAM\backups
-```
-
-## NVRAM tab
-
-The table preserves the exact record order of `nvram.txt` and shows Setting, Help String,
-Token, Offset, Width, BIOS Default, and Options/Value. Search across names, help text,
-tokens, offsets, and export IDs; filter by type or by editable/warning state.
-
-**Queue selected change** (or a double-click) edits an entry. Settings the parser could
-not read unambiguously are greyed out and refused rather than guessed at.
-
-## Quick Settings tab
-
-The overclocking controls of a platform on one page, in three sections: **CPU**, **RAM**,
-and **GPU / PCIe**, so the settings that matter for tuning are together instead of spread
-through 5,000 rows. Each row shows the setting's current value and an editor that starts
-on it; set a new value and press **Queue**. It is the same queue the NVRAM table feeds,
-so Import still runs the preflight, backup, and verification around whatever you queue
-here. No values are suggested: the tab decides what to show, not what to set.
-
-A preset is the list of settings. `assets/quick_settings/msi_z790_ddr5.json` was built
-from a stock export and a tuned export of an MSI Z790 MPOWER: every setting whose value
-differs between the two is a row, plus a standing list in `src/bin/make_quick_settings.rs`
-of controls that belong on the page regardless (Hyper-Threading, XMP, the common timings).
-Rows match the live NVRAM by **token + offset + width**;
-a row the loaded firmware does not have says so and stays disabled. One row can write
-several identities, which is how the per-channel copies of a DDR5 timing become a single
-control.
-
-**Presets are per vendor.** MSI, ASUS, ASRock, and Gigabyte lay their NVRAM out
-differently -- different identities, names, order, and which settings exist at all -- so
-an MSI preset finds nothing on an ASUS board. That is deliberate: matching by name across
-vendors would be guessing, and this program writes firmware. When a loaded export is from
-another family the tab says so at the top, with the count of controls found, instead of
-showing a page of disabled rows. Each vendor gets its own preset, built the same way.
-
-To build one, export once at stock and once tuned on that board, then run
+The bundled preset is **MSI Z790 (LGA 1700 DDR5)**. Presets are per vendor because MSI,
+ASUS, ASRock, and Gigabyte lay out their NVRAM differently. To build one for another board,
+export once at stock and once tuned, then run:
 
 ```bash
-cargo run --release --bin make-quick-settings -- stock.txt tuned.txt --vendor ASUS --board "ROG Maximus Z790 Apex" --name "ASUS Z790 (LGA 1700 DDR5)" --platform asus-z790-ddr5 --out assets/quick_settings/asus_z790_ddr5.json
+make-quick-settings.exe stock.txt tuned.txt --vendor ASUS --board "ROG Maximus Z790 Apex" --name "ASUS Z790 (LGA 1700 DDR5)" --platform asus-z790-ddr5 --out assets/quick_settings/asus_z790_ddr5.json
 ```
 
-It sorts the differences into the three sections by name, drops fan curves and other
-changes that are not overclocking controls, and lists anything it could not place.
+An `assets/quick_settings/` folder beside the executable overrides the built-in presets.
 
-## Load NVRAM
+## If something goes wrong
 
-Restores settings from a previously saved `nvram.txt`, for example after a Clear CMOS.
-The saved file is never written wholesale: its settings are matched to the live export by
-**token + offset + width** and every difference is queued as an ordinary pending change,
-so the preflight, backup, and verification above still apply. Review the queue, then
-press Import.
-
-You do not need to press Export first. If no live export is loaded yet, Load NVRAM asks
-for the saved file and then reads the live NVRAM itself before comparing.
-
-The dialog defaults to the archive of every NVRAM the tool has captured, and reports how
-many settings will be queued, already match, or were skipped. It warns when the saved
-file's HII CRC differs from the live one.
-
-## Pending Changes tab
-
-Setting, Help String, Before, and After for each queued change. Remove entries, clear the
-queue, export a modified `nvram.txt`, or export a transaction JSON without writing
-anything.
-
-## Compare tab
-
-Browse for **NVRAM 1** and **NVRAM 2**; changed settings are shown by default. Matching
-uses token + offset + width and preserves NVRAM 1's record order.
-
-**Only value changes count.** A setting renamed between BIOS builds whose value is
-unchanged is reported as Same, with the differing name shown for context. Type changes
-and settings present in only one file count as changed. If the two files report different
-HII CRC values the app warns, because their offsets may describe different BIOS layouts.
-**Export comparison CSV** saves the changed rows.
-
-## Log tab
-
-A catalog of every NVRAM the tool has opened -- not a log of changes. Each row records
-Date & Time, Source, SCEWIN version, HII CRC32, setting count, SHA-256, and the archived
-file. A verbatim copy of every capture is kept, content-addressed by SHA-256 so identical
-re-opens are not duplicated. Double-click a row to open that exact export.
-
-```text
-%LOCALAPPDATA%\NVRAM\logs\nvram_catalog.jsonl   catalog
-%LOCALAPPDATA%\NVRAM\logs\nvram\                archived nvram.txt files
-%LOCALAPPDATA%\NVRAM\logs\nvram.log             activity audit trail
-```
+- **Values didn't verify?** Check that "Password protection of Runtime Variables" is
+  Disabled in BIOS. With it on, SCEWIN exits cleanly but its writes are dropped.
+- **To undo an import**, use Load NVRAM on `nvram_before.txt` from its folder in
+  `%LOCALAPPDATA%\NVRAM\backups`.
 
 ## Offline mode
 
-`roch-nvram.exe --offline` is a dry run. It never executes SCEWIN, never writes firmware,
-needs no administrator rights, and hides Export and Import. Compare and Log still work.
-
-It needs a sample export in `data/` -- an `nvram.txt` and its parsed `.json`. Those are
-board-specific and are not tracked, so a fresh clone has no `data/`: point the app at your
-own export with `--profile` and `--nvram`, or generate a pair with
-
-```bash
-cargo run --release --bin scewin-parser -- nvram.txt --output data/z890_tachyon_nvram_parsed.json
-```
-
-Live mode and the tests are unaffected; the tests use their own committed fixture.
-
-## Safety notes
-
-- **If an import reports that values did not verify, check that "Password protection of
-  Runtime Variables" is Disabled in BIOS setup.** That setting locks the UEFI runtime
-  variable interface, so SCEWIN exits cleanly while its writes are silently dropped.
-- A backup is taken before every import, but there is no automatic rollback. To revert,
-  import `nvram_before.txt` from the backup folder.
-- A successful import may still need a reboot. The confirmation offers **Restart now**.
-- SCEWIN is an AMI utility bundled here for convenience. This project does not establish
-  its authenticity or its own right to redistribute it -- see
-  [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+`roch-nvram.exe --offline --profile profile.json --nvram nvram.txt` opens an export without
+SCEWIN, administrator rights, or any firmware access. Make the profile with
+`scewin-parser.exe nvram.txt --output profile.json`.
 
 ## Building
 
-Needs a Rust toolchain (1.87 or newer) with the MSVC target. The Windows SDK's resource
-compiler stamps the icon and the version from `Cargo.toml` into the executable; without
-it the build still succeeds and says what it skipped.
+Needs Rust 1.87 or newer with the MSVC target.
 
 ```bash
 cargo build --release
-```
-
-That produces `target\release\roch-nvram.exe`, a single file with the window, the icon,
-and the presets inside it. Copy `scewin/` beside it to run it. The same build produces
-`scewin-parser.exe` and `make-quick-settings.exe`, the command-line tools.
-
-## Tests
-
-```bash
 cargo test
 ```
 
-The tests run on a fresh clone. They cover parsing, record order, option and value
-edits, byte-for-byte rewriting, Latin-1 round trips, stale-value rejection, profile
-matching, verification, comparison results, CSV export, the catalog and its archiving,
-the Quick Settings presets and the queueing behind their tab, the NVRAM tab's button
-states, and that the version is written in exactly one place.
+The tests use a small synthetic export in `tests/fixtures/` and never run SCEWIN.
 
-The export they read is committed at `tests/fixtures/nvram.txt`: a small synthetic SCEWIN
-file, not a board dump, keeping the record shapes real ones have. Its parsed profile is
-generated during the run rather than committed beside it, so the two cannot drift apart.
-Nothing in the suite executes SCEWIN or touches firmware.
+## Credits and licence
 
-## Layout
+- [SCEHUB](https://github.com/ab3lkaizen/SCEHUB) by ab3lkaizen, whose `Export.bat` and
+  `Import.bat` this tool is built around.
+- AMISCE (SCEWIN) is American Megatrends' utility. Every read and write goes through it.
 
-```text
-src/lib.rs              the library: everything except the window
-  parser.rs             nvram.txt -> settings (scewin_parser.py)
-  core.rs               the export document, edits, rewriting (core.py)
-  backend.rs            SCEWIN export / preflight / backup / import / verify
-  compare.rs            NVRAM 1 vs NVRAM 2
-  catalog.rs            the NVRAM catalog and the activity log
-  quick_settings.rs     presets and their matching
-  session.rs            the window's state and rules, without the window
-  pycompat.rs           Python-compatible JSON, CSV, integers and line splitting
-src/main.rs, src/gui/   the window (egui)
-src/bin/                scewin-parser, make-quick-settings
-```
-
-## Credits
-
-- **[SCEHUB](https://github.com/ab3lkaizen/SCEHUB)** by ab3lkaizen -- packages AMISCE with
-  the `Export.bat` / `Import.bat` pair this program is built around. The Export and Import
-  buttons are those two steps with a review in between.
-- **AMISCE** is American Megatrends' utility. Every read and write goes through it; this
-  project only decides what to ask it for.
-
-## Licence
-
-GPL-3.0-or-later. See [LICENSE](LICENSE).
-
-Third-party components, including the bundled AMI binaries that are **not** covered by
-that licence, are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+GPL-3.0-or-later; see [LICENSE](LICENSE). The bundled AMI binaries are **not** covered by
+that licence; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

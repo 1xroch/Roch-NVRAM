@@ -70,7 +70,9 @@ pub fn show<A>(ui: &mut Ui, palette: &Palette, index: usize, dialog: &mut Dialog
                 if button(ui, palette, dialog.buttons.0, true).clicked() {
                     answer = Some(true);
                 }
-            } else if button(ui, palette, "OK", true).clicked() || ui.input(|input| input.key_pressed(Key::Enter)) {
+            } else if button(ui, palette, "OK", true).clicked()
+                || ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter))
+            {
                 answer = Some(false);
             }
         });

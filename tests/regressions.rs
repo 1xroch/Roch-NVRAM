@@ -316,3 +316,32 @@ fn has_identity_rejects_empty_and_placeholder_keys() {
     assert!(has_identity("0100:0010:01"));
     assert!(has_identity("0100::"));
 }
+
+#[test]
+fn a_record_with_a_bare_carriage_return_is_not_rewritten() {
+    // The parser reads a bare \r as a line break and the writer does not, so
+    // the writer could miss an option row and leave two selected.
+    let temp = tempfile::TempDir::new().unwrap();
+    let records = "Setup Question\t= Fan Curve
+Help String\t= Fan curve selection
+Token\t= 0101
+Offset\t= 0011
+Width\t= 01
+BIOS Default\t= [00]Auto
+Options\t=*[00]Auto
+\t[01]Balanced\r\t[02]Manual
+
+";
+    let (profile, document) = common::build(temp.path(), records);
+    let id = profile.settings[0].export_id.clone();
+    let change = document.build_change(&profile, &id, "01").unwrap();
+    let error = document.render([&change]).unwrap_err();
+    assert!(error.to_string().contains("unusual line break"), "{error}");
+}
+
+#[test]
+fn control_characters_are_refused_in_values() {
+    for value in ["1\u{0b}2", "a\u{0c}b", "x\u{85}y", "tab\there"] {
+        assert!(roch_nvram::core::normalize_value(value, Some(16)).is_err(), "{value:?}");
+    }
+}

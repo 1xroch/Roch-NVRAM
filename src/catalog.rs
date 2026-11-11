@@ -27,8 +27,9 @@ fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     let mut stream = OpenOptions::new().create(true).append(true).open(path)?;
-    stream.write_all(line.as_bytes())?;
-    stream.write_all(b"\n")
+    // One write per line: two instances appending at once, or a crash between
+    // a line and its newline, would otherwise glue two records together.
+    stream.write_all(format!("{line}\n").as_bytes())
 }
 
 /// Persistent timestamped logger for NVRAM-related activity.
@@ -153,8 +154,15 @@ impl NvramCatalog {
         };
         let hii = if hii_crc32.is_empty() { "NVRAM" } else { hii_crc32 };
         let destination = self.archive_dir.join(format!("{hii}_{key}.txt"));
-        if !destination.exists() && fs::copy(source, &destination).is_err() {
-            return String::new();
+        // Copied under a temporary name and renamed into place, so a copy cut
+        // short never sits in the archive looking complete.
+        if !destination.exists() {
+            let partial = destination.with_extension("txt.partial");
+            let copied = fs::copy(source, &partial).and_then(|_| fs::rename(&partial, &destination));
+            if copied.is_err() {
+                let _ = fs::remove_file(&partial);
+                return String::new();
+            }
         }
         destination.display().to_string()
     }

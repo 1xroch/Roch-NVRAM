@@ -162,10 +162,6 @@ impl BiosSetting {
         Self { source: source.to_string(), ..Self::default() }
     }
 
-    pub fn has_warning(&self, warning: &str) -> bool {
-        self.warnings.iter().any(|item| item == warning)
-    }
-
     fn finalize(&mut self, hii_crc32: Option<&str>) {
         let crc = hii_crc32.filter(|crc| !crc.is_empty()).unwrap_or("NOCRC");
         let or = |value: &str, missing: &'static str| {
@@ -258,7 +254,8 @@ pub fn parse_metadata(text: &str) -> Metadata {
         script_file_name: found(0),
         created_on: found(1),
         amisce_version: found(2),
-        hii_crc32: found(3),
+        // Upper-cased as ScewinDocument does, so export IDs agree with it.
+        hii_crc32: found(3).map(|crc| crc.to_uppercase()),
     }
 }
 

@@ -195,3 +195,24 @@ fn an_edit_back_to_the_live_value_drops_the_queued_change() {
     assert!(log.contains("| CHANGE_QUEUED | Fan Curve: Auto -> Manual"));
     assert!(log.contains("| CHANGE_REMOVED | Fan Curve: queued change was reset to the current value."));
 }
+
+#[test]
+fn load_nvram_drops_a_queued_change_the_saved_file_undoes() {
+    // The saved file has Board Label at its live value, so a change queued for
+    // it earlier would import something the user did not mean to restore.
+    let temp = TempDir::new().unwrap();
+    let mut session = session(temp.path(), true);
+    let (profile, document) = build(&temp.path().join("live"), RECORDS);
+    let label = profile.settings.iter().find(|s| s.question == "Board Label").unwrap().export_id.clone();
+    let stale = document.build_change(&profile, &label, "bye").unwrap();
+    session.show_nvram(profile, document, "test");
+    session.queue_all(vec![stale], &[]);
+
+    let saved = temp.path().join("saved");
+    std::fs::create_dir_all(&saved).unwrap();
+    let diff = session.differences_from(&load_snapshot(write_nvram(&saved, &manual())).unwrap());
+    assert!(diff.reset.contains(&label));
+    session.queue_all(diff.queued, &diff.reset);
+    assert!(!session.changes.contains_key(&label));
+    assert_eq!(session.changes.len(), 1);
+}

@@ -103,7 +103,7 @@ pub fn run(options: Options) -> ExitCode {
         None
     };
 
-    let title = if options.live { format!("{APP_NAME} {VERSION}") } else { format!("{APP_NAME} {VERSION} — Dry Run") };
+    let title = window_title(options.live);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
         .with_inner_size([1500.0, 850.0])
@@ -198,7 +198,7 @@ enum Action {
     ExportLive,
     ConfirmImport(Box<ApplyPlan>),
     CancelImport,
-    QueueLoaded { changes: Vec<PendingChange>, summary: String },
+    QueueLoaded { changes: Vec<PendingChange>, reset: Vec<String>, summary: String },
     CancelLoad { summary: String },
     RestartPc,
 }
@@ -225,17 +225,22 @@ struct App {
     dark: bool,
     sync_caption: bool,
     icon: Option<TextureHandle>,
+    title: String,
     tab: Tab,
 
     search: String,
     kind: KindFilter,
     warnings: WarningFilter,
     haystacks: Vec<String>,
+    /// is_editable for each setting, worked out once per export.
+    editable: Vec<bool>,
     filtered: Vec<usize>,
     filter_key: Option<(String, KindFilter, WarningFilter, usize)>,
     generation: usize,
     selected_setting: Option<usize>,
-    selected_change: Option<usize>,
+    /// The export ID of the selected pending change. Queue edits reorder the
+    /// queue, so a position would drift onto a different change.
+    selected_change: Option<String>,
 
     stock: Option<NvramSnapshot>,
     overclocked: Option<NvramSnapshot>,
@@ -273,11 +278,13 @@ impl App {
             dark,
             sync_caption: true,
             icon,
+            title: window_title(live),
             tab: Tab::Nvram,
             search: String::new(),
             kind: KindFilter::All,
             warnings: WarningFilter::All,
             haystacks: Vec::new(),
+            editable: Vec::new(),
             filtered: Vec::new(),
             filter_key: None,
             generation: 0,
@@ -368,15 +375,24 @@ impl App {
     /// Put a freshly opened export in the table and catalogue it.
     fn show_nvram(&mut self, profile: ParsedProfile, document: ScewinDocument, source: &str) {
         let entry = self.session.show_nvram(profile, document, source);
-        self.catalog.insert(0, entry);
+        self.add_catalog_entry(entry);
         let settings = self.session.profile.as_ref().map(|p| p.settings.as_slice()).unwrap_or_default();
         self.haystacks = settings
             .iter()
             .map(|s| [&s.question, &s.help, &s.token_hex, &s.offset_hex, &s.export_id].map(|f| f.as_str()).join(" ").to_lowercase())
             .collect();
+        self.editable = settings.iter().map(|s| is_editable(s).0).collect();
         self.generation += 1;
         self.selected_setting = None;
         self.selected_change = None;
+    }
+
+    /// Newest first, so the selected Log row moves down with its capture.
+    fn add_catalog_entry(&mut self, entry: CatalogEntry) {
+        self.catalog.insert(0, entry);
+        if let Some(index) = &mut self.catalog_selected {
+            *index += 1;
+        }
     }
 
     fn refresh_filter(&mut self) {
@@ -396,7 +412,7 @@ impl App {
                 }
                 match key.2 {
                     WarningFilter::WarningsOnly if setting.warnings.is_empty() => return false,
-                    WarningFilter::EditableOnly if !is_editable(setting).0 => return false,
+                    WarningFilter::EditableOnly if !self.editable[*index] => return false,
                     _ => {}
                 }
                 key.0.is_empty() || self.haystacks[*index].contains(&key.0)
@@ -485,11 +501,22 @@ impl App {
                 );
                 let verified = result.verified_export;
                 self.show_nvram(verified.profile, verified.document, "Live refresh after apply");
+                // Every queued value verified, but SCEWIN imports the whole file:
+                // a non-zero exit (never seen in a clean import) is worth a look.
+                let code = result.import_result.returncode;
+                let exit_note = if code == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\nSCEWIN exited with code {code}. Check import.log in the backup folder before \
+                         restarting."
+                    )
+                };
                 self.dialogs.push(Dialog {
-                    level: Level::Information,
+                    level: if code == 0 { Level::Information } else { Level::Warning },
                     title: "NVRAM changes applied".into(),
                     text: format!(
-                        "All {} queued change(s) were imported and verified.\n\nBackup: {}\n\n\
+                        "All {} queued change(s) were imported and verified.\n\nBackup: {}{exit_note}\n\n\
                          Restart Windows for settings that require a reboot. Save your work in other \
                          programs before you restart.",
                         result.verified_count,
@@ -522,9 +549,9 @@ impl App {
                 });
             }
             Action::CancelImport => self.log("APPLY_CANCELLED", "User cancelled the confirmed NVRAM import."),
-            Action::QueueLoaded { changes, summary } => {
+            Action::QueueLoaded { changes, reset, summary } => {
                 let count = changes.len();
-                self.session.queue_all(changes);
+                self.session.queue_all(changes, &reset);
                 self.log("NVRAM_LOAD_QUEUED", &summary);
                 self.info(
                     "NVRAM loaded",
@@ -543,7 +570,8 @@ impl App {
     /// Restart Windows right away, after an import the user wants to take effect.
     fn restart_pc(&mut self) {
         self.log("RESTART_REQUESTED", "User chose Restart now after a verified NVRAM import.");
-        let mut command = std::process::Command::new("shutdown");
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut command = std::process::Command::new(PathBuf::from(system_root).join("System32").join("shutdown.exe"));
         command.args(["/r", "/t", "0"]);
         #[cfg(windows)]
         {
@@ -619,6 +647,7 @@ impl App {
         }
         let setting = self
             .selected_setting
+            .filter(|index| self.filtered.contains(index))
             .and_then(|index| self.session.profile.as_ref().and_then(|p| p.settings.get(index)))
             .cloned();
         let Some(setting) = setting else {
@@ -692,7 +721,9 @@ impl App {
     fn queue_from_snapshot(&mut self, snapshot: NvramSnapshot) {
         let diff = self.session.differences_from(&snapshot);
         let (already, missing, blocked) = (diff.already, diff.missing, diff.blocked.len());
-        if diff.queued.is_empty() {
+        // Queued changes for settings the saved file already has live.
+        let stale: Vec<String> = diff.reset.into_iter().filter(|id| self.session.changes.contains_key(id)).collect();
+        if diff.queued.is_empty() && stale.is_empty() {
             self.info(
                 "Nothing to restore",
                 format!(
@@ -730,6 +761,12 @@ impl App {
         if diff.queued.len() > 12 {
             lines.push(format!("• ...and {} more", thousands(diff.queued.len() - 12)));
         }
+        if !stale.is_empty() {
+            lines.push(format!(
+                "• {} queued change(s) will be dropped: the saved file has the live value for them.",
+                thousands(stale.len())
+            ));
+        }
         lines.push(String::new());
         lines.push(format!(
             "{} already match, {} not in live export, {} skipped.",
@@ -741,16 +778,17 @@ impl App {
         lines.push("Nothing is written yet. Review under Pending Changes, then press Import.".into());
         let path = snapshot.path.display().to_string();
         let queued_summary = format!(
-            "path={path}; queued={}; already_match={already}; missing={missing}; skipped={blocked}; saved_HII={}; \
-             live_HII={live_hii}",
+            "path={path}; queued={}; dropped={}; already_match={already}; missing={missing}; skipped={blocked}; \
+             saved_HII={}; live_HII={live_hii}",
             diff.queued.len(),
+            stale.len(),
             snapshot.hii_crc32
         );
         let cancel_summary = format!("path={path}; candidates={}", diff.queued.len());
         self.question(
             "Load NVRAM",
             lines.join("\n"),
-            Action::QueueLoaded { changes: diff.queued, summary: queued_summary },
+            Action::QueueLoaded { changes: diff.queued, reset: stale, summary: queued_summary },
             Some(Action::CancelLoad { summary: cancel_summary }),
         );
     }
@@ -843,7 +881,7 @@ impl App {
             }
         };
         let entry = self.session.catalog_snapshot(&format!("Compare {label}"), &snapshot);
-        self.catalog.insert(0, entry);
+        self.add_catalog_entry(entry);
         let (count, hii) = (snapshot.settings.len(), snapshot.hii_crc32.clone());
         match role {
             Role::Stock => self.stock = Some(snapshot),
@@ -1005,6 +1043,10 @@ impl App {
 
 // ----- drawing ---------------------------------------------------------------
 
+fn window_title(live: bool) -> String {
+    if live { format!("{APP_NAME} {VERSION}") } else { format!("{APP_NAME} {VERSION} — Dry Run") }
+}
+
 fn accent_button(ui: &mut Ui, palette: &Palette, text: &str, enabled: bool) -> egui::Response {
     let button = if enabled {
         Button::new(RichText::new(text).font(bold(12.0)).color(Color32::WHITE))
@@ -1136,7 +1178,6 @@ impl App {
     fn settings_tab(&mut self, ui: &mut Ui) {
         self.refresh_filter();
         let p = self.palette();
-        let loaded = self.session.loaded();
         let mut clicked = None;
         let mut double = false;
         let mut press: Option<&'static str> = None;
@@ -1203,7 +1244,7 @@ impl App {
                             let queued = self.session.changes.contains_key(&setting.export_id);
                             let color = if selected {
                                 Color32::WHITE
-                            } else if !is_editable(setting).0 {
+                            } else if !self.editable[index] {
                                 p.semantic_muted
                             } else if queued {
                                 p.semantic_queued
@@ -1251,7 +1292,7 @@ impl App {
         if let Some(index) = clicked {
             self.selected_setting = Some(index);
         }
-        if double && loaded {
+        if double {
             self.edit_selected();
         }
         match press {
@@ -1269,7 +1310,7 @@ impl App {
         let live = self.live();
         let mut press: Option<&'static str> = None;
         let mut clicked = None;
-        if self.selected_change.is_some_and(|index| index >= self.session.changes.len()) {
+        if self.selected_change.as_ref().is_some_and(|id| !self.session.changes.contains_key(id)) {
             self.selected_change = None;
         }
         Self::with_buttons(
@@ -1316,32 +1357,28 @@ impl App {
                         }
                     })
                     .body(|body| {
-                        let rows: Vec<&PendingChange> = self.session.changes.values().collect();
-                        body.rows(ROW_HEIGHT, rows.len(), |mut row| {
-                            let index = row.index();
-                            let change = rows[index];
-                            let selected = self.selected_change == Some(index);
+                        body.rows(ROW_HEIGHT, self.session.changes.len(), |mut row| {
+                            let Some((id, change)) = self.session.changes.get_index(row.index()) else { return };
+                            let selected = self.selected_change.as_ref() == Some(id);
                             row.set_selected(selected);
                             let color = if selected { Color32::WHITE } else { p.text };
                             for text in [&change.question, &change.help, &change.old_display, &change.new_display] {
                                 row.col(|ui| cell(ui, text, color, false));
                             }
                             if row.response().clicked() {
-                                clicked = Some(index);
+                                clicked = Some(id.clone());
                             }
                         });
                     });
             },
         );
-        if let Some(index) = clicked {
-            self.selected_change = Some(index);
+        if let Some(id) = clicked {
+            self.selected_change = Some(id);
         }
         match press {
             Some("remove") => {
-                if let Some(index) = self.selected_change.take() {
-                    if let Some(id) = self.session.changes.get_index(index).map(|(id, _)| id.clone()) {
-                        self.session.remove_change(&id);
-                    }
+                if let Some(id) = self.selected_change.take() {
+                    self.session.remove_change(&id);
                 }
             }
             Some("clear") => {
@@ -1380,7 +1417,8 @@ impl App {
 
         let mut queue = None;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for (section_index, range) in self.session.quick_layout.clone() {
+            for layout_index in 0..self.session.quick_layout.len() {
+                let (section_index, range) = self.session.quick_layout[layout_index].clone();
                 let title = self.session.quick_sections[section_index].title.clone();
                 ui.add_space(6.0);
                 Frame::new()
@@ -1402,16 +1440,18 @@ impl App {
                                 for index in range {
                                     let view = self.session.quick_row_view(index);
                                     let row = &mut self.session.quick_rows[index];
-                                    let spec = &row.resolved.spec;
-                                    let mut tip = vec![if spec.help.is_empty() { "No firmware help text.".to_string() } else { spec.help.clone() }];
-                                    tip.push(format!("Identities: {}", spec.identities.join(", ")));
-                                    if !row.resolved.missing.is_empty() {
-                                        tip.push(format!("Not on this board: {}", row.resolved.missing.join(", ")));
-                                    }
-                                    if !row.resolved.blocked.is_empty() {
-                                        tip.push(format!("Blocked: {}", row.resolved.blocked.join("; ")));
-                                    }
-                                    ui.add(egui::Label::new(spec.name.as_str()).sense(Sense::hover())).on_hover_text(tip.join("\n"));
+                                    let resolved = &row.resolved;
+                                    ui.add(egui::Label::new(resolved.spec.name.as_str()).sense(Sense::hover())).on_hover_ui(|ui| {
+                                        let spec = &resolved.spec;
+                                        ui.label(if spec.help.is_empty() { "No firmware help text." } else { spec.help.as_str() });
+                                        ui.label(format!("Identities: {}", spec.identities.join(", ")));
+                                        if !resolved.missing.is_empty() {
+                                            ui.label(format!("Not on this board: {}", resolved.missing.join(", ")));
+                                        }
+                                        if !resolved.blocked.is_empty() {
+                                            ui.label(format!("Blocked: {}", resolved.blocked.join("; ")));
+                                        }
+                                    });
                                     ui.label(&view.current);
                                     ui.add_enabled_ui(view.enabled, |ui| match &mut row.editor {
                                         QuickEditor::Options { items, selected } => {
@@ -1746,7 +1786,9 @@ impl App {
                         let response = ui.add(
                             TextEdit::singleline(text).hint_text("Decimal or 0x-prefixed hexadecimal").desired_width(400.0),
                         );
-                        if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        if response.lost_focus()
+                            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                        {
                             save = true;
                         }
                     }
@@ -1783,6 +1825,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
+        // Alt+F4 or the taskbar's Close would orphan SCEWIN mid-import and skip
+        // the verification, so closing waits until the job is done.
+        if self.job.is_some() && ctx.input(|input| input.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
         if self.sync_caption {
             theme::sync_title_bar(frame, self.dark);
             self.sync_caption = false;
@@ -1795,11 +1842,10 @@ impl eframe::App for App {
             .frame(Frame::new().fill(p.window))
             .show_separator_line(false)
             .show(ui, |ui| {
-                let title = format!("{APP_NAME} {VERSION}");
-                if shell::title_bar(ui, p, &title, self.icon.as_ref(), self.dark).toggle_theme {
+                if shell::title_bar(ui, p, &self.title, self.icon.as_ref(), self.dark).toggle_theme {
                     self.set_dark_mode(&ctx, !self.dark);
                 }
-                // The hairline the menu bar used to draw under the title.
+                // A hairline between the title bar and the tabs.
                 let rect = ui.max_rect();
                 ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, p.border));
             });

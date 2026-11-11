@@ -39,7 +39,7 @@ sha2 = "0.10"
 
 # GUI
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence"] }
-egui_extras = "0.37"
+egui_extras = { version = "0.37", default-features = false }
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 open = "5"
 raw-window-handle = "0.6"

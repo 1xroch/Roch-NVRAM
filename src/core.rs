@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
-use crate::parser::{option_line_indexes, sha256_file, BiosSetting, Kind, Metadata, ProfileSource};
+use crate::parser::{option_line_indexes, sha256_bytes, sha256_file, BiosSetting, Kind, Metadata, ProfileSource};
 use crate::paths;
 use crate::pycompat::{decode_latin1, encode_latin1, int_base0, repr_str, strip, text_mode, to_json, JsonStyle};
 
@@ -56,9 +56,6 @@ pub struct RecordSpan {
     pub export_id: String,
     pub start: usize,
     pub end: usize,
-    pub token_hex: String,
-    pub offset_hex: String,
-    pub width_hex: String,
 }
 
 /// A parsed profile JSON, as `scewin-parser` or a live export writes it.
@@ -194,7 +191,9 @@ pub fn normalize_value(value: &str, width: Option<i64>) -> Result<String> {
     if cleaned.is_empty() {
         return Err(Error::validation("Value cannot be empty."));
     }
-    if cleaned.contains(['<', '>', '\r', '\n']) {
+    // Control characters include the line breaks the parser splits on, which
+    // would cut the Value line in two.
+    if cleaned.contains(['<', '>']) || cleaned.chars().any(char::is_control) {
         return Err(Error::validation("Value contains unsupported characters."));
     }
     if encode_latin1(cleaned).is_err() {
@@ -245,7 +244,7 @@ impl ScewinDocument {
         let path = path.as_ref().to_path_buf();
         let read = |error: std::io::Error| Error::validation(format!("Could not read the SCEWIN export: {error}"));
         let bytes = fs::read(&path).map_err(read)?;
-        let source_sha256 = sha256_file(&path).map_err(read)?;
+        let source_sha256 = sha256_bytes(&bytes);
         let text = decode_latin1(&bytes);
         let hii_crc32 = HII_RE
             .captures(&text)
@@ -320,6 +319,19 @@ impl ScewinDocument {
 
     fn modify_block(&self, block: &str, change: &PendingChange) -> Result<String> {
         let mut lines: Vec<String> = block.split('\n').map(str::to_string).collect();
+        // The writer splits on \n alone, but the parser also breaks lines at a
+        // bare \r and the other splitlines boundaries. A record holding one of
+        // those mid-line would be read as more rows than are rewritten here,
+        // which could leave two options selected. Trailing \r is a line ending.
+        let foreign_break = |line: &String| {
+            line.trim_end_matches('\r').contains(['\r', '\u{0b}', '\u{0c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}'])
+        };
+        if lines.iter().any(foreign_break) {
+            return Err(Error::validation(format!(
+                "The record for {} contains an unusual line break. It was not changed.",
+                change.export_id
+            )));
+        }
         if change.kind == Kind::Value {
             let mut changed = 0;
             for line in lines.iter_mut() {
@@ -445,7 +457,7 @@ fn index_records(text: &str, hii_crc32: &str) -> Result<IndexMap<String, RecordS
         }
         records.insert(
             export_id.clone(),
-            RecordSpan { export_id, start, end, token_hex: token, offset_hex: offset, width_hex: width },
+            RecordSpan { export_id, start, end },
         );
     }
     Ok(records)

@@ -26,6 +26,21 @@
 - The project's repository is now https://github.com/1xroch/Roch-NVRAM, and the X
   link in the footer now goes to https://x.com/1xroch.
 
+### Fixes
+
+- If an import fails after SCEWIN has started writing, the error now names the backup
+  folder and records the failure in its `transaction.json`.
+- A leftover SCEWIN output file can no longer pass for a fresh export.
+- Records with a stray carriage return inside them are refused instead of rewritten, and
+  values with control characters are rejected.
+- A non-zero SCEWIN exit code after a verified import is shown as a warning.
+- The window can't be closed while SCEWIN is running.
+- Load NVRAM drops an earlier queued change when the saved file already has the live value.
+- The selected Pending Changes and Log rows no longer jump to a different entry when the
+  list changes, and Enter in the edit box no longer dismisses its own error message.
+- Catalog and log lines are written in one piece, and archived exports are copied
+  atomically.
+
 ## 1.0.4
 
 - Match Roch Viewer's Consolas typography, compact title and footer strips, and

@@ -19,7 +19,6 @@
 
 mod gui;
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -37,7 +36,6 @@ struct Args {
     no_elevate: bool,
     profile: PathBuf,
     nvram: PathBuf,
-    raw: Vec<OsString>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -47,9 +45,8 @@ fn parse_args() -> Result<Args, String> {
         no_elevate: false,
         profile: base.join("data").join("z890_tachyon_nvram_parsed.json"),
         nvram: base.join("data").join("z890_tachyon_nvram.txt"),
-        raw: std::env::args_os().skip(1).collect(),
     };
-    let mut iter = args.raw.clone().into_iter();
+    let mut iter = std::env::args_os().skip(1);
     while let Some(arg) = iter.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -76,8 +73,10 @@ fn parse_args() -> Result<Args, String> {
 /// the way run.bat did it. Offline mode never asks. Returns true when the
 /// elevated copy was started and this one should exit; when the prompt is
 /// declined the window opens anyway, and Export explains what is missing.
+/// Only live mode elevates, and live mode takes no other arguments, so none
+/// are forwarded.
 #[cfg(windows)]
-fn relaunch_elevated(raw: &[OsString]) -> bool {
+fn relaunch_elevated() -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -86,21 +85,12 @@ fn relaunch_elevated(raw: &[OsString]) -> bool {
         return false;
     }
     let Ok(exe) = std::env::current_exe() else { return false };
-    let quote = |arg: &OsString| {
-        let text = arg.to_string_lossy();
-        if text.is_empty() || text.contains([' ', '\t', '"']) {
-            format!("\"{}\"", text.replace('"', "\\\""))
-        } else {
-            text.into_owned()
-        }
-    };
-    let mut parameters: Vec<String> = raw.iter().map(quote).collect();
     // The elevated copy must not ask again if elevation silently failed.
-    parameters.push("--no-elevate".into());
+    let parameters = "--no-elevate";
     let wide = |text: &std::ffi::OsStr| text.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
     let verb = wide("runas".as_ref());
     let file = wide(exe.as_os_str());
-    let params = wide(parameters.join(" ").as_ref());
+    let params = wide(parameters.as_ref());
     let directory = std::env::current_dir().map(|dir| wide(dir.as_os_str())).unwrap_or_else(|_| vec![0]);
     // SAFETY: every pointer is a NUL-terminated UTF-16 buffer that outlives
     // the call; a null window handle is allowed.
@@ -112,7 +102,7 @@ fn relaunch_elevated(raw: &[OsString]) -> bool {
 }
 
 #[cfg(not(windows))]
-fn relaunch_elevated(_raw: &[OsString]) -> bool {
+fn relaunch_elevated() -> bool {
     false
 }
 
@@ -131,7 +121,7 @@ fn main() -> ExitCode {
         }
     };
 
-    if !args.offline && !args.no_elevate && relaunch_elevated(&args.raw) {
+    if !args.offline && !args.no_elevate && relaunch_elevated() {
         return ExitCode::SUCCESS;
     }
 

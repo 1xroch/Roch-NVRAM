@@ -36,7 +36,6 @@ pub struct ScewinRunResult {
 pub struct LiveExport {
     pub profile: ParsedProfile,
     pub document: ScewinDocument,
-    pub profile_path: PathBuf,
     pub nvram_path: PathBuf,
     pub dupes_path: Option<PathBuf>,
     pub run_result: ScewinRunResult,
@@ -104,7 +103,6 @@ pub fn remap_changes<'a>(
     fresh_document: &ScewinDocument,
     changes: impl IntoIterator<Item = &'a PendingChange>,
 ) -> Result<Vec<PendingChange>> {
-    let queued: Vec<&PendingChange> = changes.into_iter().collect();
     if old_profile.hii_crc32() != fresh_profile.hii_crc32() {
         return Err(Error::mismatch(format!(
             "The live HII CRC changed from {} to {}. Nothing was imported.",
@@ -118,7 +116,7 @@ pub fn remap_changes<'a>(
     let mut remapped = Vec::new();
     let mut conflicts = Vec::new();
 
-    for change in &queued {
+    for change in changes {
         let (Some(old), Some(fresh)) = (old_by_id.get(change.export_id.as_str()), fresh_by_id.get(change.export_id.as_str()))
         else {
             conflicts.push(format!("{}: setting is missing from the fresh export", change.question));
@@ -143,7 +141,8 @@ pub fn remap_changes<'a>(
         }
     }
 
-    if !conflicts.is_empty() || remapped.len() != queued.len() {
+    // Every queued change either rebuilt or recorded a conflict.
+    if !conflicts.is_empty() {
         return Err(Error::validation(format!(
             "The queued changes no longer match the live NVRAM export. Nothing was imported.\n\n{}",
             first_twenty(&conflicts)
@@ -288,7 +287,12 @@ impl ScewinBackend {
                     break None;
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(50)),
-                Err(error) => return Err(Error::execution(format!("Could not start SCEWIN: {error}"))),
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = collector.join();
+                    return Err(Error::execution(format!("Lost track of SCEWIN: {error}")));
+                }
             }
         };
         let output = decode_latin1(&collector.join().unwrap_or_default());
@@ -322,8 +326,18 @@ impl ScewinBackend {
         let nvram_path = self.runtime_dir.join(&nvram_name);
         let dupes_path = self.runtime_dir.join(&dupes_name);
         let profile_path = self.runtime_dir.join(format!("profile_{safe_tag}.json"));
+        // A leftover file from an earlier run would pass for this run's output
+        // if SCEWIN then failed to write one, so it must really be gone.
         for path in [&nvram_path, &dupes_path, &profile_path] {
-            let _ = fs::remove_file(path);
+            match fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(Error::execution(format!(
+                        "Could not clear the previous SCEWIN output {}: {error}",
+                        path.display()
+                    )));
+                }
+                _ => {}
+            }
         }
 
         let result = self.run(&format!("{safe_tag}_export.log"), &["/O", "/S", &nvram_name, "/SD", &dupes_name])?;
@@ -342,7 +356,7 @@ impl ScewinBackend {
         let profile = ParsedProfile::load(&profile_path)?;
         let document = ScewinDocument::open(&nvram_path)?;
         document.verify_profile(&profile)?;
-        Ok(LiveExport { profile, document, profile_path, nvram_path, dupes_path: dupes, run_result: result })
+        Ok(LiveExport { profile, document, nvram_path, dupes_path: dupes, run_result: result })
     }
 
     /// Re-export and check that every queued change still applies.
@@ -377,7 +391,6 @@ impl ScewinBackend {
 
         let apply_name = "nvram_apply.txt";
         let apply_path = self.runtime_dir.join(apply_name);
-        let _ = fs::remove_file(&apply_path);
         live.document.write_modified_copy(&apply_path, &plan.changes)?;
         copy(&apply_path, &backup_dir.join(apply_name))?;
 
@@ -395,29 +408,51 @@ impl ScewinBackend {
         let save = |transaction: &Value| write_file(&transaction_path, text_mode(&to_json(transaction, JsonStyle::Indent2, true)).as_bytes());
         save(&transaction)?;
 
-        let import_result = self.run("last_import.log", &["/I", "/S", apply_name])?;
-        copy(&import_result.log_path, &backup_dir.join("import.log"))?;
+        // From here on the firmware may have been written, so every failure
+        // names the backup and is recorded in the transaction as far as it can be.
+        let after_import = |transaction: &mut Value, key: &str, error: &Error, what: &str| {
+            transaction[key] = json!(error.to_string());
+            let _ = save(transaction);
+            Error::execution(format!(
+                "{what}\n\nBackup: {}\nTo undo, use Load NVRAM on nvram_before.txt from that folder.\n\n{error}",
+                backup_dir.display()
+            ))
+        };
+
+        let import_result = match self.run("last_import.log", &["/I", "/S", apply_name]) {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(after_import(
+                    &mut transaction,
+                    "import_error",
+                    &error,
+                    "The SCEWIN import did not finish, so it may have been interrupted. Press Export to see \
+                     the live values.",
+                ));
+            }
+        };
+        let _ = copy(&import_result.log_path, &backup_dir.join("import.log"));
         transaction["import_returncode"] = json!(import_result.returncode);
         transaction["import_output"] = json!(import_result.output);
-        save(&transaction)?;
+        let _ = save(&transaction);
 
         let verified = match self.export_current("verify") {
             Ok(verified) => verified,
             Err(error) => {
-                transaction["verification_error"] = json!(error.to_string());
-                save(&transaction)?;
-                return Err(Error::execution(format!(
-                    "SCEWIN import ran, but a verification export could not be created.\n\nBackup: {}\n\n{error}",
-                    backup_dir.display()
-                )));
+                return Err(after_import(
+                    &mut transaction,
+                    "verification_error",
+                    &error,
+                    "SCEWIN import ran, but a verification export could not be created.",
+                ));
             }
         };
 
-        copy(&verified.nvram_path, &backup_dir.join("nvram_after_verify.txt"))?;
-        copy(&verified.run_result.log_path, &backup_dir.join("verify_export.log"))?;
+        let _ = copy(&verified.nvram_path, &backup_dir.join("nvram_after_verify.txt"));
+        let _ = copy(&verified.run_result.log_path, &backup_dir.join("verify_export.log"));
         let mismatches = verify_changes(&verified.profile, &plan.changes);
         transaction["verification_mismatches"] = json!(mismatches);
-        save(&transaction)?;
+        let _ = save(&transaction);
 
         if !mismatches.is_empty() {
             return Err(Error::execution(format!(

@@ -36,6 +36,9 @@ pub struct SavedNvramDiff {
     pub blocked: Vec<String>,
     pub missing: usize,
     pub already: usize,
+    /// Live export IDs whose saved value is already the live one. A change
+    /// queued earlier for one of them would undo the restore.
+    pub reset: Vec<String>,
 }
 
 /// A Quick Settings row's editor: a dropdown of option codes or a text field.
@@ -322,7 +325,11 @@ impl Session {
         differences_from(profile, document, snapshot)
     }
 
-    pub fn queue_all(&mut self, changes: Vec<PendingChange>) {
+    /// Queue a Load NVRAM result: drop the changes `reset` names, then queue `changes`.
+    pub fn queue_all(&mut self, changes: Vec<PendingChange>, reset: &[String]) {
+        for id in reset {
+            self.changes.shift_remove(id);
+        }
         for change in changes {
             self.changes.insert(change.export_id.clone(), change);
         }
@@ -550,6 +557,7 @@ pub fn differences_from(profile: &ParsedProfile, document: &ScewinDocument, snap
         }
         if raw_value(saved) == raw_value(current) {
             diff.already += 1;
+            diff.reset.push(current.export_id.clone());
             continue;
         }
         let (editable, reason) = is_editable(current);
