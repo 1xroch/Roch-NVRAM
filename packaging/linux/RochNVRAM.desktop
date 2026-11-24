@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Roch NVRAM
+GenericName=BIOS settings editor
+Comment=Read, queue and write AMI BIOS settings, with backup and verification
+Exec=roch-nvram
+Icon=RochNVRAM
+Terminal=false
+Categories=System;Settings;
+StartupWMClass=RochNVRAM

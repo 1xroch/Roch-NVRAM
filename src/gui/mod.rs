@@ -26,7 +26,7 @@ use eframe::egui::{
 };
 use egui_extras::{Column, TableBuilder};
 
-use roch_nvram::backend::{ApplyPlan, ApplyResult, LiveExport, ScewinBackend};
+use roch_nvram::backend::{ApplyPlan, ApplyResult, LiveExport, ScewinBackend, ENGINE, OS_NAME};
 use roch_nvram::catalog::CatalogEntry;
 use roch_nvram::compare::{compare_snapshots, export_compare_csv, load_snapshot, CompareResult, NvramSnapshot};
 use roch_nvram::core::{is_editable, setting_display, write_transaction, ParsedProfile, PendingChange, ScewinDocument};
@@ -106,6 +106,8 @@ pub fn run(options: Options) -> ExitCode {
     let title = window_title(options.live);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
+        // The Wayland app id, which is how the launcher entry finds a running window's icon.
+        .with_app_id("RochNVRAM")
         .with_inner_size([1500.0, 850.0])
         .with_min_inner_size([700.0, 480.0])
         .with_decorations(false)
@@ -443,7 +445,7 @@ impl App {
             }
             Err(TryRecvError::Disconnected) => {
                 self.job = None;
-                self.critical("Unexpected error", "The SCEWIN worker stopped without a result.");
+                self.critical("Unexpected error", format!("The {ENGINE} worker stopped without a result."));
                 return;
             }
         };
@@ -508,7 +510,7 @@ impl App {
                     String::new()
                 } else {
                     format!(
-                        "\n\nSCEWIN exited with code {code}. Check import.log in the backup folder before \
+                        "\n\n{ENGINE} exited with code {code}. Check import.log in the backup folder before \
                          restarting."
                     )
                 };
@@ -517,7 +519,7 @@ impl App {
                     title: "NVRAM changes applied".into(),
                     text: format!(
                         "All {} queued change(s) were imported and verified.\n\nBackup: {}{exit_note}\n\n\
-                         Restart Windows for settings that require a reboot. Save your work in other \
+                         Restart {OS_NAME} for settings that require a reboot. Save your work in other \
                          programs before you restart.",
                         result.verified_count,
                         result.backup_dir.display()
@@ -544,7 +546,7 @@ impl App {
                         ),
                     );
                 }
-                self.start_job("Importing queued NVRAM settings through SCEWIN...", move |backend| {
+                self.start_job(&format!("Importing queued NVRAM settings through {ENGINE}..."), move |backend| {
                     JobResult::Apply(backend.execute_apply(&plan))
                 });
             }
@@ -567,25 +569,31 @@ impl App {
         }
     }
 
-    /// Restart Windows right away, after an import the user wants to take effect.
+    /// Restart right away, after an import the user wants to take effect.
     fn restart_pc(&mut self) {
         self.log("RESTART_REQUESTED", "User chose Restart now after a verified NVRAM import.");
-        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-        let mut command = std::process::Command::new(PathBuf::from(system_root).join("System32").join("shutdown.exe"));
-        command.args(["/r", "/t", "0"]);
         #[cfg(windows)]
-        {
+        let mut command = {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
+            let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+            let mut command = std::process::Command::new(PathBuf::from(system_root).join("System32").join("shutdown.exe"));
+            command.args(["/r", "/t", "0"]).creation_flags(CREATE_NO_WINDOW);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = std::process::Command::new("systemctl");
+            command.arg("reboot");
+            command
+        };
         let failure = match command.status() {
             Ok(status) if status.success() => return,
-            Ok(status) => format!("shutdown exited with {status}."),
-            Err(error) => format!("Could not run shutdown: {error}"),
+            Ok(status) => format!("The restart command exited with {status}."),
+            Err(error) => format!("Could not run the restart command: {error}"),
         };
         self.log("RESTART_FAILED", &failure);
-        self.critical("Restart failed", format!("{failure}\n\nThe settings are applied; restart Windows yourself."));
+        self.critical("Restart failed", format!("{failure}\n\nThe settings are applied; restart {OS_NAME} yourself."));
     }
 
     // ----- the round trip ----------------------------------------------------
@@ -614,7 +622,7 @@ impl App {
             self.info("Dry run", "Reading the live NVRAM is disabled in offline mode.");
             return;
         }
-        self.start_job("Reading the live NVRAM through SCEWIN...", |backend| {
+        self.start_job(&format!("Reading the live NVRAM through {ENGINE}..."), |backend| {
             JobResult::Export(backend.export_current("current"))
         });
     }
@@ -1193,11 +1201,11 @@ impl App {
                     };
                     let response = match label {
                         "Export" => response.on_hover_text(
-                            "Read the live NVRAM through SCEWIN and load it into the table. Nothing is read from the \
+                            "Read the live NVRAM and load it into the table. Nothing is read from the \
                              firmware until you press this.",
                         ),
                         "Import" => response.on_hover_text(
-                            "Write the queued changes through SCEWIN. A backup and a verification pass run around the \
+                            "Write the queued changes. A backup and a verification pass run around the \
                              import.",
                         ),
                         "Load NVRAM..." => response.on_hover_text(
@@ -1326,7 +1334,7 @@ impl App {
                     if live
                         && accent_button(ui, p, "Import", loaded)
                             .on_hover_text(
-                                "Write the queued changes through SCEWIN. A backup and a verification pass run around \
+                                "Write the queued changes. A backup and a verification pass run around \
                                  the import.",
                             )
                             .clicked()

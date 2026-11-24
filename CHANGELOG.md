@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.0
+
+- **Linux.** Roch NVRAM now runs on Linux, without SCEWIN. AMI publishes its BIOS
+  setup database (the HII database SCEWIN reads) through the `HiiDB` UEFI variable, so
+  Roch NVRAM reads it directly: the setting names, options, defaults and where each is
+  stored come from there, and the current values from the UEFI variables in
+  efivarfs. Exports are written in AMISCE's layout (Token is the question id, as
+  AMISCE prints it), so the table, the queue, Load NVRAM, Compare, the pre-import
+  checks, the backup and the verification all work as on Windows.
+- **Writing on Linux** goes through a small root helper that re-reads the database
+  itself and changes only the bytes of the queued settings, only to a value the
+  setting allows (one of its options, 0 or 1 for a checkbox, inside a numeric's
+  range). It rewrites existing variables only, with the same size and attributes, and
+  refuses the whole import if anything does not check out.
+- Reading the setup database and writing ask for your password through pkexec. The
+  database is kept per BIOS build, so the read asks once, and again after a BIOS
+  update. `sudo roch-nvram setup` installs a root-owned copy and a polkit rule so
+  neither asks; `sudo roch-nvram setup --undo` removes them.
+- Settings the running system cannot read (volatile or boot-time-only variables such
+  as `SetupVolatileData`) are left out of a Linux export rather than guessed.
+- `roch-nvram --export FILE` reads the live NVRAM to a file without opening the
+  window, on both systems.
+- **Restart now** after a verified import restarts Linux with `systemctl reboot`.
+- Linux release: `RochNVRAM-<version>-linux-x86_64.tar.gz` with an installer for
+  `~/.local/bin` and the launcher.
+
 ## 1.0.5
 
 - Rewritten in Rust. Roch NVRAM is now one native executable with no Python or Qt

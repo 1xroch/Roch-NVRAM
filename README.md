@@ -1,8 +1,9 @@
-# Roch NVRAM 1.0.5
+# Roch NVRAM 1.1.0
 
-A Windows editor for AMI BIOS settings. It reads the live NVRAM with AMI's SCEWIN, lets
-you review and queue changes, and writes them back only after a backup, a fresh check
-that nothing moved, and a value-by-value verification.
+An editor for AMI BIOS settings on Windows and Linux. It reads the live NVRAM (with
+AMI's SCEWIN on Windows, natively on Linux), lets you review and queue changes, and
+writes them back only after a backup, a fresh check that nothing moved, and a
+value-by-value verification.
 
 ![Roch NVRAM showing the NVRAM tab with 5,364 settings loaded (offline mode)](docs/screenshot.png)
 
@@ -18,6 +19,37 @@ that nothing moved, and a value-by-value verification.
 
 There is nothing to install. Backups, the catalog, and the theme live in
 `%LOCALAPPDATA%\NVRAM`, so upgrading keeps them.
+
+## Linux
+
+1. Download `RochNVRAM-1.1.0-linux-x86_64.tar.gz` from
+   [Releases](https://github.com/1xroch/Roch-NVRAM/releases), unpack it and run
+   `./install.sh`. That puts `roch-nvram` in `~/.local/bin` and **Roch NVRAM** in your
+   launcher, as your user.
+2. Open it and press **Export**.
+
+Linux has no SCEWIN, and none is needed. An AMI BIOS publishes its setup database (the
+HII database SCEWIN reads) through the `HiiDB` UEFI variable; Roch NVRAM reads the
+setting names, options and defaults from there and the current values from the UEFI
+variables in `/sys/firmware/efi/efivars`. The export is written in AMISCE's layout,
+so everything below works the same. Writing goes through a small root helper that
+re-reads the database and changes only the bytes of the queued settings, only to a
+value the setting allows.
+
+- **The password.** Reading the setup database (it lives in firmware memory) and
+  writing need root, so both ask through pkexec. The database is kept per BIOS build,
+  so the read asks once, and again after a BIOS update. To stop the prompts:
+  `sudo ~/.local/bin/roch-nvram setup`. It installs a root-owned copy at
+  `/usr/local/bin/roch-nvram` and a polkit rule that lets you start only its two
+  helpers without a password. The trade: anything running as you could then change
+  BIOS settings without asking. `roch-nvram setup --status` shows what is in place;
+  `sudo roch-nvram setup --undo` removes it. Run setup again after updating.
+- **What is left out.** Settings in variables the running system cannot read
+  (volatile or boot-time-only ones, such as `SetupVolatileData`) are not exported.
+- **Backups** live in `~/.nvram/backups`, as on Windows under `%LOCALAPPDATA%`.
+- `roch-nvram --export nvram.txt` reads the live NVRAM to a file with no window.
+- Needs an AMI UEFI BIOS (it says so if the `HiiDB` variable is missing), x86-64 and
+  glibc 2.35 or newer. Tested on a Gigabyte Z890 AORUS TACHYON ICE (BIOS F7a).
 
 ## How it works
 
@@ -74,20 +106,23 @@ SCEWIN, administrator rights, or any firmware access. Make the profile with
 
 ## Building
 
-Needs Rust 1.87 or newer with the MSVC target.
+Needs Rust 1.87 or newer: the MSVC target on Windows, the GNU one on Linux.
 
 ```bash
 cargo build --release
 cargo test
 ```
 
-The tests use a small synthetic export in `tests/fixtures/` and never run SCEWIN.
+The tests use a small synthetic export in `tests/fixtures/` and synthetic HII databases,
+and never run SCEWIN or touch firmware.
 
 ## Credits and licence
 
 - [SCEHUB](https://github.com/ab3lkaizen/SCEHUB) by ab3lkaizen, whose `Export.bat` and
   `Import.bat` this tool is built around.
-- AMISCE (SCEWIN) is American Megatrends' utility. Every read and write goes through it.
+- AMISCE (SCEWIN) is American Megatrends' utility. On Windows every read and write goes
+  through it. The Linux reader follows the UEFI specification's HII package and IFR
+  formats and does not use AMI code.
 
 GPL-3.0-or-later; see [LICENSE](LICENSE). The bundled AMI binaries are **not** covered by
 that licence; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

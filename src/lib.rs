@@ -26,6 +26,10 @@ pub mod catalog;
 pub mod compare;
 pub mod core;
 pub mod error;
+pub mod hii;
+#[cfg(target_os = "linux")]
+pub mod linux;
+pub mod sce;
 pub mod parser;
 pub mod paths;
 pub mod pycompat;

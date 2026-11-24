@@ -5,10 +5,14 @@
 //! Running SCEWIN: export, preflight, backup, import, and verification.
 
 use std::fs;
+#[cfg(not(target_os = "linux"))]
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "linux"))]
 use std::process::{Command, Stdio};
+#[cfg(not(target_os = "linux"))]
 use std::thread;
+#[cfg(not(target_os = "linux"))]
 use std::time::{Duration, Instant};
 
 use chrono::Local;
@@ -23,7 +27,14 @@ use crate::paths;
 use crate::pycompat::{decode_latin1, text_mode, to_json, JsonStyle};
 
 const REQUIRED: [&str; 3] = ["SCEWIN_64.exe", "amifldrv64.sys", "amigendrv64.sys"];
+#[cfg(not(target_os = "linux"))]
 const TIMEOUT: Duration = Duration::from_secs(180);
+
+/// What reads and writes the NVRAM here, for messages: SCEWIN on Windows, the
+/// native reader on Linux.
+pub const ENGINE: &str = if cfg!(target_os = "linux") { "the native reader" } else { "SCEWIN" };
+/// The system to restart for a setting to take effect.
+pub const OS_NAME: &str = if cfg!(windows) { "Windows" } else { "the PC" };
 
 #[derive(Clone, Debug)]
 pub struct ScewinRunResult {
@@ -218,6 +229,16 @@ impl ScewinBackend {
     }
 
     pub fn ensure_ready(&self) -> Result<()> {
+        // Linux has no SCEWIN: the native reader in `crate::linux` does its two jobs.
+        #[cfg(target_os = "linux")]
+        {
+            crate::linux::check_ready().map_err(Error::execution)?;
+            let setup = |error: std::io::Error| Error::execution(format!("Could not prepare {}: {error}", self.app_root.display()));
+            fs::create_dir_all(&self.runtime_dir).map_err(setup)?;
+            fs::create_dir_all(&self.backup_root).map_err(setup)?;
+            return Ok(());
+        }
+        #[allow(unreachable_code)]
         if !cfg!(windows) {
             return Err(Error::execution("Live SCEWIN mode is only available on Windows."));
         }
@@ -249,6 +270,26 @@ impl ScewinBackend {
         Ok(())
     }
 
+    /// Linux: SCEWIN's export and import, done by the native reader, with the
+    /// same files and a log line in place of SCEWIN's console output.
+    #[cfg(target_os = "linux")]
+    fn run(&self, log_name: &str, args: &[&str]) -> Result<ScewinRunResult> {
+        self.ensure_ready()?;
+        let log_path = self.runtime_dir.join(log_name);
+        let at = |name: &str| self.runtime_dir.join(name);
+        let outcome = match args {
+            ["/O", "/S", nvram, "/SD", dupes] => crate::linux::export_files(&self.app_root, &at(nvram), &at(dupes)),
+            ["/I", "/S", file] => crate::linux::import_file(&at(file)),
+            _ => Err(format!("Unsupported SCEWIN command: {}", args.join(" "))),
+        };
+        let output = match &outcome {
+            Ok(text) | Err(text) => text.clone(),
+        };
+        let _ = fs::write(&log_path, output.as_bytes());
+        outcome.map(|output| ScewinRunResult { returncode: 0, output, log_path }).map_err(Error::execution)
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn run(&self, log_name: &str, args: &[&str]) -> Result<ScewinRunResult> {
         self.ensure_ready()?;
         let log_path = self.runtime_dir.join(log_name);

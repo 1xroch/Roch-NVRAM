@@ -47,3 +47,59 @@ jobs:
             target/release/scewin-parser.exe
             target/release/make-quick-settings.exe
           if-no-files-found: error
+
+  linux:
+    # The native reader and writer (src/hii.rs, src/sce.rs, src/linux.rs) and the window on Linux.
+    # The HII parsing and the import checks run against synthetic databases; nothing here touches
+    # firmware. Built in an Ubuntu 22.04 container so the packaged binary runs on glibc 2.35 and
+    # newer; the window's system libraries are loaded at run time.
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install the compiler, and what the actions below use
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gcc git libc6-dev binutils pkg-config
+
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-22.04
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Run the tests
+        run: cargo test --locked
+
+      - name: Build and package
+        run: |
+          cargo build --release --locked
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          ! ldd target/release/roch-nvram | grep -vE 'linux-vdso|ld-linux|libc\.so|libm\.so|libgcc_s\.so'
+          target/release/roch-nvram setup --show | grep -q polkit
+          dir="RochNVRAM-$version-linux-x86_64"
+          mkdir -p "$dir" dist
+          install -m755 target/release/roch-nvram "$dir/roch-nvram"
+          install -m755 packaging/linux/install.sh "$dir/install.sh"
+          install -m644 packaging/linux/RochNVRAM.desktop "$dir/RochNVRAM.desktop"
+          install -m644 assets/roch_nvram.png "$dir/RochNVRAM.png"
+          cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.txt "$dir/"
+          tar -czf "dist/$dir.tar.gz" "$dir"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: roch-nvram-linux
+          path: dist/
+          if-no-files-found: error

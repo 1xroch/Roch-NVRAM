@@ -3,7 +3,7 @@ name = "roch-nvram"
 # The one place the version is written. The window title, the executable's file
 # properties (build.rs) and the tests read it from here; CHANGELOG.md and
 # README.md are checked against it by tests/version.rs.
-version = "1.0.5"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.87"
 description = "An editor for AMI SCEWIN NVRAM exports"
@@ -53,6 +53,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The window on Linux: Wayland and X11, loaded at run time.
+eframe = { version = "0.37", default-features = false, features = ["wayland", "x11"] }
+libc = "0.2"
 
 [build-dependencies]
 embed-resource = "3"
