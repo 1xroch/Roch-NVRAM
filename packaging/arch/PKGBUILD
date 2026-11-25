@@ -1,0 +1,41 @@
+# Maintainer: Roch Studio <300260898+1xroch@users.noreply.github.com>
+
+# Installs the binary published with a release: nothing is compiled, so no Rust toolchain is needed.
+# It never runs `roch-nvram setup`: reading and writing BIOS settings without a password stays the
+# user's step.
+
+pkgname=roch-nvram-bin
+pkgver=1.1.0
+pkgrel=1
+pkgdesc='AMI BIOS setup editor: read, compare and change BIOS settings from the running system'
+arch=(x86_64)
+url='https://github.com/1xroch/Roch-NVRAM'
+license=(GPL-3.0-or-later)
+depends=(glibc libgcc hicolor-icon-theme polkit)
+optdepends=(
+  'libglvnd: the window'
+  'libxkbcommon: the window'
+  'wayland: the window on Wayland'
+  'libx11: the window on X11'
+  'libxcursor: the window on X11'
+  'libxi: the window on X11'
+  'libxkbcommon-x11: the window on X11'
+  'fontconfig: the system fonts'
+  'xdg-utils: opening links from the window'
+)
+provides=(roch-nvram)
+conflicts=(roch-nvram)
+options=(!debug !strip)
+install=roch-nvram.install
+_dir="RochNVRAM-$pkgver-linux-x86_64"
+source=("$_dir.tar.gz::$url/releases/download/v$pkgver/$_dir.tar.gz")
+sha256sums=('0b783dcc7a8d7774e432557217dc7260d2dc1fb79ead561051c5eaeafc6350b6')
+
+package() {
+  cd "$_dir"
+  install -Dm755 roch-nvram "$pkgdir/usr/bin/roch-nvram"
+  install -Dm644 RochNVRAM.desktop "$pkgdir/usr/share/applications/RochNVRAM.desktop"
+  install -Dm644 RochNVRAM.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/RochNVRAM.png"
+  install -Dm644 THIRD_PARTY_NOTICES.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.txt"
+  install -Dm644 -t "$pkgdir/usr/share/doc/roch-nvram" README.md CHANGELOG.md
+}
