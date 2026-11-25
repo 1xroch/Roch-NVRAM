@@ -306,6 +306,11 @@ pub fn run_helper_command(args: &[String]) -> Option<i32> {
 }
 
 /// `roch-nvram setup`: no password for the two helpers.
+///
+/// The rule names one program nobody but root can change, or it would hand out root: a package's
+/// `/usr/bin/roch-nvram` already is, so the rule names it and an update replaced in place keeps
+/// working; anything else (`~/.local/bin`) is copied to [`setup::INSTALLED`] first, and the copy is
+/// used only while it is this same build.
 pub mod setup {
     use std::ffi::CStr;
     use std::os::unix::fs::{chown, MetadataExt, PermissionsExt};
@@ -323,10 +328,22 @@ roch-nvram setup --show     what setup would change, without changing it
 roch-nvram setup --undo     remove it (with sudo), so reading and writing ask again
 ";
 
-    /// The installed copy while it is this very build, else this executable.
+    /// This program when nobody but root can change it (a package install), else the installed
+    /// copy while it is this very build, else this executable, which brings the prompt back.
     pub fn helper_program() -> std::io::Result<PathBuf> {
         let exe = std::env::current_exe()?;
-        Ok(if installed_matches(&exe) { PathBuf::from(INSTALLED) } else { exe })
+        Ok(if root_protected(&exe) || !installed_matches(&exe) { exe } else { PathBuf::from(INSTALLED) })
+    }
+
+    /// Root-owned and writable by nobody else: the file, and every folder above it, since whoever
+    /// can write a folder can swap the file inside it.
+    fn root_protected(path: &Path) -> bool {
+        let safe = |meta: &std::fs::Metadata| meta.uid() == 0 && meta.mode() & 0o022 == 0;
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_file() && safe(&meta) => {}
+            _ => return false,
+        }
+        path.ancestors().skip(1).all(|folder| folder.as_os_str().is_empty() || std::fs::metadata(folder).is_ok_and(|meta| safe(&meta)))
     }
 
     fn installed_matches(exe: &Path) -> bool {
@@ -382,17 +399,21 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
         !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
     }
 
-    fn rule_text(user: &str) -> String {
+    fn plain_path(path: &str) -> bool {
+        path.starts_with('/') && !path.bytes().any(|b| b == b'"' || b == b'\\' || b.is_ascii_control())
+    }
+
+    fn rule_text(user: &str, program: &str) -> String {
         format!(
             "// Written by `roch-nvram setup` for {user}; `sudo roch-nvram setup --undo` removes it.\n\
-             // Lets {user} start Roch NVRAM's root helpers without a password: only the root-owned copy at\n\
-             // {INSTALLED}, only as {HII_DUMP_ARG} (read the BIOS setup database) or {IMPORT_ARG} (write\n\
-             // checked BIOS setting changes), and only from an active local session.\n\
+             // Lets {user} start Roch NVRAM's root helpers without a password: only {program}, which\n\
+             // nobody but root can change, only as {HII_DUMP_ARG} (read the BIOS setup database) or\n\
+             // {IMPORT_ARG} (write checked BIOS setting changes), and only from an active local session.\n\
              polkit.addRule(function (action, subject) {{\n\
              \x20   if (action.id == \"org.freedesktop.policykit.exec\" &&\n\
-             \x20       action.lookup(\"program\") == \"{INSTALLED}\" &&\n\
-             \x20       (action.lookup(\"command_line\") == \"{INSTALLED} {HII_DUMP_ARG}\" ||\n\
-             \x20        action.lookup(\"command_line\") == \"{INSTALLED} {IMPORT_ARG}\") &&\n\
+             \x20       action.lookup(\"program\") == \"{program}\" &&\n\
+             \x20       (action.lookup(\"command_line\") == \"{program} {HII_DUMP_ARG}\" ||\n\
+             \x20        action.lookup(\"command_line\") == \"{program} {IMPORT_ARG}\") &&\n\
              \x20       subject.user == \"{user}\" && subject.local && subject.active) {{\n\
              \x20       return polkit.Result.YES;\n\
              \x20   }}\n\
@@ -402,8 +423,11 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
 
     fn show() -> i32 {
         println!("Setup would:");
-        println!("  copy this program to {INSTALLED}, owned by root and writable only by root");
-        println!("  write {RULE_FILE}, letting you start that copy as {HII_DUMP_ARG} or {IMPORT_ARG} without a password");
+        match std::env::current_exe() {
+            Ok(exe) if root_protected(&exe) => println!("  leave this program where it is: {} is root-owned, so the rule can name it", exe.display()),
+            _ => println!("  copy this program to {INSTALLED}, owned by root and writable only by root"),
+        }
+        println!("  write {RULE_FILE}, letting you start that program as {HII_DUMP_ARG} or {IMPORT_ARG} without a password");
         println!("Anything running as you could then change BIOS settings without asking.");
         0
     }
@@ -426,6 +450,25 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
         result
     }
 
+    /// The program the rule names, and whether it had to be copied there.
+    fn install_files(user: &str) -> Result<(String, bool), String> {
+        let exe = std::env::current_exe().map_err(|e| format!("could not find this program: {e}"))?;
+        let (program, copied) = if root_protected(&exe) {
+            // A package's copy: a stale one setup made earlier would only confuse, so it goes.
+            let _ = std::fs::remove_file(INSTALLED);
+            (exe.display().to_string(), false)
+        } else {
+            let bytes = std::fs::read(&exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+            put(Path::new(INSTALLED), &bytes, 0o755)?;
+            (INSTALLED.to_string(), true)
+        };
+        if !plain_path(&program) {
+            return Err(format!("{program} cannot be named in a polkit rule"));
+        }
+        put(Path::new(RULE_FILE), rule_text(user, &program).as_bytes(), 0o644)?;
+        Ok((program, copied))
+    }
+
     fn install() -> i32 {
         if !require_root("") {
             return 1;
@@ -434,15 +477,15 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
             eprintln!("Could not tell who this is for: run it through sudo or pkexec rather than as root directly.");
             return 1;
         };
-        let result = std::env::current_exe()
-            .map_err(|e| format!("could not find this program: {e}"))
-            .and_then(|exe| std::fs::read(&exe).map_err(|e| format!("{}: {e}", exe.display())))
-            .and_then(|program| put(Path::new(INSTALLED), &program, 0o755))
-            .and_then(|()| put(Path::new(RULE_FILE), rule_text(&user).as_bytes(), 0o644));
-        match result {
-            Ok(()) => {
-                println!("Installed {INSTALLED} and {RULE_FILE}. Roch NVRAM will no longer ask {user} for a password.");
-                println!("Run it again after updating Roch NVRAM; `sudo roch-nvram setup --undo` removes it.");
+        match install_files(&user) {
+            Ok((program, copied)) => {
+                println!("Wrote {RULE_FILE}. Roch NVRAM will no longer ask {user} for a password.");
+                if copied {
+                    println!("It names the copy at {program}: run setup again after updating Roch NVRAM.");
+                } else {
+                    println!("It names {program}, so an update installed in its place keeps working.");
+                }
+                println!("`sudo roch-nvram setup --undo` removes it.");
                 0
             }
             Err(error) => {
@@ -453,12 +496,22 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
     }
 
     fn status() -> i32 {
+        let exe = std::env::current_exe().unwrap_or_default();
         let installed = Path::new(INSTALLED).exists();
         let rule = match std::fs::metadata(RULE_FILE) {
             Ok(_) => Some(true),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
             Err(_) => None,
         };
+        if root_protected(&exe) {
+            match rule {
+                Some(true) => println!("Set up: {RULE_FILE} is in place."),
+                Some(false) => println!("Not set up: reading and writing the BIOS settings ask for a password. Run `sudo roch-nvram setup`."),
+                None => println!("{RULE_FILE} is readable only by root; `sudo roch-nvram setup --status` shows it."),
+            }
+            println!("{} is root-owned, so with the rule in place it starts without asking, updates included.", exe.display());
+            return 0;
+        }
         match (installed, rule) {
             (false, Some(false)) => println!("Not set up: reading and writing the BIOS settings ask for a password."),
             (true, Some(true)) => println!("Set up: {INSTALLED} and {RULE_FILE} are in place."),
@@ -467,7 +520,6 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
             (true, Some(false)) => println!("Partly set up: {RULE_FILE} is missing. Run `sudo roch-nvram setup` again."),
         }
         if installed {
-            let exe = std::env::current_exe().unwrap_or_default();
             if installed_matches(&exe) {
                 println!("This build matches the installed copy, so it starts without asking.");
             } else {
@@ -500,12 +552,21 @@ roch-nvram setup --undo     remove it (with sudo), so reading and writing ask ag
         use super::*;
 
         #[test]
-        fn the_rule_allows_only_the_two_helpers_of_the_installed_copy() {
-            let rule = rule_text("local");
-            assert!(rule.contains("== \"/usr/local/bin/roch-nvram --hii-dump\""));
-            assert!(rule.contains("== \"/usr/local/bin/roch-nvram --sce-import\""));
+        fn the_rule_allows_only_the_two_helpers_of_one_program() {
+            let rule = rule_text("local", "/usr/bin/roch-nvram");
+            assert!(rule.contains("== \"/usr/bin/roch-nvram --hii-dump\""));
+            assert!(rule.contains("== \"/usr/bin/roch-nvram --sce-import\""));
             assert!(rule.contains("subject.user == \"local\" && subject.local && subject.active"));
             assert!(!plain_name("a\" || true || \"b"));
+            assert!(plain_path("/usr/bin/roch-nvram") && !plain_path("/a\"b"));
+        }
+
+        #[test]
+        fn a_home_install_is_not_protected() {
+            let home = std::env::temp_dir().join(format!("roch-nvram-setup-test-{}", std::process::id()));
+            std::fs::write(&home, b"x").unwrap();
+            assert!(!root_protected(&home));
+            let _ = std::fs::remove_file(home);
         }
     }
 }

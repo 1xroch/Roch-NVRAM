@@ -43,7 +43,9 @@ value the setting allows.
   `/usr/local/bin/roch-nvram` and a polkit rule that lets you start only its two
   helpers without a password. The trade: anything running as you could then change
   BIOS settings without asking. `roch-nvram setup --status` shows what is in place;
-  `sudo roch-nvram setup --undo` removes it. Run setup again after updating.
+  `sudo roch-nvram setup --undo` removes it. Run setup again after updating, unless Roch NVRAM
+  came from a package (`/usr/bin/roch-nvram`): setup then names that file directly, and updates
+  keep working.
 - **What is left out.** Settings in variables the running system cannot read
   (volatile or boot-time-only ones, such as `SetupVolatileData`) are not exported.
 - **Backups** live in `~/.nvram/backups`, as on Windows under `%LOCALAPPDATA%`.
